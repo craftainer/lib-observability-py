@@ -2,13 +2,14 @@
 
 from collections.abc import Callable
 
+import boto3
 import httpx
 import pytest
 from botocore.exceptions import ClientError
+from redis.asyncio import Redis
 from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.health import checks
 from app.health.checks import (
     DatabaseHealthCheck,
     MockHealthCheck,
@@ -85,14 +86,14 @@ def _fake_redis_from_url(*, fail: bool) -> Callable[[str], _FakeRedisClient]:
 
 async def test_redis_check_reports_healthy_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
     """RedisHealthCheck reports healthy when PING succeeds."""
-    monkeypatch.setattr(checks.Redis, "from_url", _fake_redis_from_url(fail=False))
+    monkeypatch.setattr(Redis, "from_url", _fake_redis_from_url(fail=False))
     result = await RedisHealthCheck("redis://example").check()
     assert result.healthy is True
 
 
 async def test_redis_check_reports_unhealthy_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """RedisHealthCheck reports unhealthy, with detail, when PING fails."""
-    monkeypatch.setattr(checks.Redis, "from_url", _fake_redis_from_url(fail=True))
+    monkeypatch.setattr(Redis, "from_url", _fake_redis_from_url(fail=True))
     result = await RedisHealthCheck("redis://example").check()
     assert result.healthy is False
     assert result.detail is not None
@@ -118,14 +119,14 @@ def _fake_boto3_client(*, fail: bool) -> Callable[..., _FakeS3Client]:
 
 async def test_s3_check_reports_healthy_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
     """S3HealthCheck reports healthy when ListBuckets succeeds."""
-    monkeypatch.setattr(checks.boto3, "client", _fake_boto3_client(fail=False))
+    monkeypatch.setattr(boto3, "client", _fake_boto3_client(fail=False))
     result = await S3HealthCheck("http://example", "ak", "sk").check()
     assert result.healthy is True
 
 
 async def test_s3_check_reports_unhealthy_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """S3HealthCheck reports unhealthy, with detail, when ListBuckets fails."""
-    monkeypatch.setattr(checks.boto3, "client", _fake_boto3_client(fail=True))
+    monkeypatch.setattr(boto3, "client", _fake_boto3_client(fail=True))
     result = await S3HealthCheck("http://example", "ak", "sk").check()
     assert result.healthy is False
     assert result.detail is not None
@@ -166,14 +167,14 @@ def _fake_async_client(*, fail: bool) -> Callable[..., _FakeAsyncClient]:
 
 async def test_oidc_check_reports_healthy_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
     """OIDCHealthCheck reports healthy when the discovery document is reachable."""
-    monkeypatch.setattr(checks.httpx, "AsyncClient", _fake_async_client(fail=False))
+    monkeypatch.setattr(httpx, "AsyncClient", _fake_async_client(fail=False))
     result = await OIDCHealthCheck("http://issuer").check()
     assert result.healthy is True
 
 
 async def test_oidc_check_reports_unhealthy_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """OIDCHealthCheck reports unhealthy, with detail, when the discovery fetch fails."""
-    monkeypatch.setattr(checks.httpx, "AsyncClient", _fake_async_client(fail=True))
+    monkeypatch.setattr(httpx, "AsyncClient", _fake_async_client(fail=True))
     result = await OIDCHealthCheck("http://issuer").check()
     assert result.healthy is False
     assert result.detail is not None
