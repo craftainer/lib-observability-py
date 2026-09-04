@@ -9,7 +9,13 @@ from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.health import checks
-from app.health.checks import DatabaseHealthCheck, OIDCHealthCheck, RedisHealthCheck, S3HealthCheck
+from app.health.checks import (
+    DatabaseHealthCheck,
+    MockHealthCheck,
+    OIDCHealthCheck,
+    RedisHealthCheck,
+    S3HealthCheck,
+)
 
 
 class _FakeConnection:
@@ -171,3 +177,11 @@ async def test_oidc_check_reports_unhealthy_on_failure(monkeypatch: pytest.Monke
     result = await OIDCHealthCheck("http://issuer").check()
     assert result.healthy is False
     assert result.detail is not None
+
+
+async def test_mock_health_check_always_reports_healthy() -> None:
+    """MockHealthCheck reports healthy without touching the network."""
+    result = await MockHealthCheck("database").check()
+    assert result.name == "database"
+    assert result.healthy is True
+    assert result.detail == "mocked"
