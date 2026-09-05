@@ -36,6 +36,18 @@ def test_json_formatter_includes_extra_fields() -> None:
     assert payload["request_id"] == "abc123"
 
 
+@pytest.mark.parametrize(
+    "key", ["token", "access_token", "password", "client_secret", "Authorization", "claims"]
+)
+def test_json_formatter_redacts_credential_shaped_extra_fields(key: str) -> None:
+    """An extra= field whose key looks like a credential is redacted, not logged verbatim."""
+    record = logging.LogRecord("app.test", logging.INFO, __file__, 1, "hello", (), None)
+    setattr(record, key, "super-secret-value")
+    payload = json.loads(_JSONFormatter().format(record))
+    assert payload[key] == "[REDACTED]"
+    assert "super-secret-value" not in json.dumps(payload)
+
+
 def test_json_formatter_includes_exception_info() -> None:
     """_JSONFormatter renders exception info when the record carries it."""
     try:

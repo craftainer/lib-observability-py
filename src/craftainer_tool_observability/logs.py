@@ -8,12 +8,14 @@ not re-modeled on app.config.Settings -- OTEL's env-var convention is already th
 single source of truth for those, vendor-neutral and unrelated to this app's own
 settings.
 
-`_JSONFormatter.format` is `# pragma: no cover` for tests/e2e specifically: no
-route in this app ever calls `logging.getLogger(...).info/error/...`, and
-uvicorn's own access/error loggers don't propagate to the root logger this
-formatter is attached to -- so no live request reaches it. tests/unit/
-test_telemetry.py exercises it directly and still counts toward its own 95%
-gate.
+`_JSONFormatter.format`/`_redact_extra` are `# pragma: no cover` for tests/e2e
+specifically: app.oidc/app.problem_details/app.controllers.crud_actions do call
+`logging.getLogger(...).warning/info/exception` on the real HTTP stack now, but
+none of them pass a credential-shaped `extra=` key or (outside a genuine bug) an
+unhandled exception, so `format`'s extra-field/exception branches and
+`_redact_extra`'s redaction branch specifically never run through a live request.
+tests/unit/test_telemetry.py exercises both directly and still counts toward its
+own 95% gate.
 """
 
 import json
@@ -36,6 +38,28 @@ settings = get_settings()
 
 _RESERVED_LOG_RECORD_ATTRS = frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__dict__)
 
+# _JSONFormatter.format below passes every non-reserved LogRecord attribute through
+# verbatim, so a future `logger.info(..., extra={"token": ...})` (or "password"/
+# "authorization"/"claims"/etc.) would otherwise leak that value into stdout/OTLP as
+# plain text. A substring match, not an exact-name allowlist, so a differently-cased
+# or prefixed key (e.g. "access_token", "Authorization") is caught too.
+_REDACTED_EXTRA_KEY_SUBSTRINGS = (
+    "token",
+    "password",
+    "secret",
+    "authorization",
+    "claims",
+    "credential",
+)
+
+
+def _redact_extra(key: str, value: Any) -> Any:  # noqa: ANN401 # pragma: no cover -- see docstring
+    """Replace `value` with a placeholder if `key` looks like it holds a credential."""
+    lowered = key.lower()
+    if any(substring in lowered for substring in _REDACTED_EXTRA_KEY_SUBSTRINGS):
+        return "[REDACTED]"
+    return value
+
 
 class _JSONFormatter(logging.Formatter):
     """Renders one JSON object per line: timestamp, level, logger, message, extras."""
@@ -50,7 +74,7 @@ class _JSONFormatter(logging.Formatter):
         }
         for key, value in record.__dict__.items():
             if key not in _RESERVED_LOG_RECORD_ATTRS:
-                payload[key] = value
+                payload[key] = _redact_extra(key, value)
         if record.exc_info is not None:
             payload["exception"] = self.formatException(record.exc_info)
         return json.dumps(payload, default=str)
