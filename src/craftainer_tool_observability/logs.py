@@ -7,6 +7,13 @@ protocol, compression, certificate) are read directly by OTLPLogExporter() itsel
 not re-modeled on app.config.Settings -- OTEL's env-var convention is already the
 single source of truth for those, vendor-neutral and unrelated to this app's own
 settings.
+
+`_JSONFormatter.format` is `# pragma: no cover` for tests/e2e specifically: no
+route in this app ever calls `logging.getLogger(...).info/error/...`, and
+uvicorn's own access/error loggers don't propagate to the root logger this
+formatter is attached to -- so no live request reaches it. tests/unit/
+test_telemetry.py exercises it directly and still counts toward its own 95%
+gate.
 """
 
 import json
@@ -33,7 +40,7 @@ _RESERVED_LOG_RECORD_ATTRS = frozenset(logging.LogRecord("", 0, "", 0, "", (), N
 class _JSONFormatter(logging.Formatter):
     """Renders one JSON object per line: timestamp, level, logger, message, extras."""
 
-    def format(self, record: logging.LogRecord) -> str:
+    def format(self, record: logging.LogRecord) -> str:  # pragma: no cover -- see module docstring
         """Serialize the record as a single-line JSON object."""
         payload: dict[str, Any] = {
             "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
