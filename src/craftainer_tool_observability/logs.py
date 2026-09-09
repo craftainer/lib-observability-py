@@ -9,7 +9,7 @@ single source of truth for those, vendor-neutral and unrelated to this app's own
 settings.
 
 `_JSONFormatter.format`/`_redact_extra` are `# pragma: no cover` for tests/e2e
-specifically: app.oidc/app.problem_details/app.controllers.crud_actions do call
+specifically: app.oidc/app.problem_details/crud.controllers.crud_actions do call
 `logging.getLogger(...).warning/info/exception` on the real HTTP stack now, but
 none of them pass a credential-shaped `extra=` key or (outside a genuine bug) an
 unhandled exception, so `format`'s extra-field/exception branches and
