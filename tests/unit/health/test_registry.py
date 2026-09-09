@@ -1,11 +1,7 @@
 """Unit test: HealthRegistry collects and concurrently runs registered checks."""
 
-import pytest
-
-from app.config import get_settings
-from app.health.base import HealthCheckResult
-from app.health.checks import MockHealthCheck
-from app.health.registry import HealthRegistry, get_health_registry
+from health.base import HealthCheckResult
+from health.registry import HealthRegistry
 
 
 class _FakeCheck:
@@ -38,22 +34,3 @@ async def test_run_all_returns_every_registered_check_result() -> None:
         HealthCheckResult("a", healthy=True),
         HealthCheckResult("b", healthy=False),
     ]
-
-
-def test_get_health_registry_registers_mock_checks_in_mock_mode(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """get_health_registry() registers four MockHealthChecks when MODE=mock."""
-    get_health_registry.cache_clear()
-    monkeypatch.setattr(get_settings(), "mode", "mock")
-    try:
-        registry = get_health_registry()
-        assert all(isinstance(check, MockHealthCheck) for check in registry._checks)
-        assert {check.name for check in registry._checks} == {
-            "database",
-            "redis",
-            "s3",
-            "oidc",
-        }
-    finally:
-        get_health_registry.cache_clear()

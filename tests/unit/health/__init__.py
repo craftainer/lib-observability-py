@@ -1,1 +1,1 @@
-"""Unit tests for app.health."""
+"""Unit tests for health."""
