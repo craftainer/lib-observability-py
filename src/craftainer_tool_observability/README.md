@@ -1,4 +1,10 @@
-# health/
+# craftainer_tool_observability/
+
+Observability building blocks `app` wires in: `health/` (the generic health
+check framework) and `logs.py` (structured logging), described below. Neither
+imports from `app`.
+
+## health/
 
 The generic health check framework: the check interface, a registry
 that runs a set of checks concurrently, and a router factory exposing
@@ -7,7 +13,7 @@ every registered check). No external dependency beyond FastAPI itself —
 this package carries no code for any specific service (Postgres, Redis,
 S3, OIDC, ...); those concrete checks and the registry that wires them
 up live in `app.health_checks` instead (see `../app/README.md`), the
-same split as `crud/`'s generic framework vs. `app/`'s resource-specific
+same split as `craftainer_tool_crud/`'s generic framework vs. `app/`'s resource-specific
 code.
 
 Laid out as its own small MVC-ish split under one strict,
@@ -36,6 +42,15 @@ graph LR
 
 An arrow means "may import from" — each module may depend on anything
 to its left, never anything to its right.
+
+## logs
+
+`logs.py`'s `configure_logging()` attaches a JSON-formatting stdout handler to the
+root logger (with credential-shaped `extra=` keys redacted) and, when
+`OTEL_EXPORTER_OTLP_ENDPOINT` is set, bridges the root logger to an OTLP log
+exporter. The OTel `service.name` comes from OTel's standard `OTEL_SERVICE_NAME`
+env var (`Resource.create()` reads it itself); the module imports neither `app`
+nor its settings. See `../app/README.md`'s "Structured logging / OTEL" section.
 
 ## Do
 

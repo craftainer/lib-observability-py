@@ -9,7 +9,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Response, status
 
-from health.registry import HealthRegistry
+from craftainer_tool_observability.health.registry import HealthRegistry
 
 
 def build_health_router(get_registry: Callable[..., HealthRegistry]) -> APIRouter:

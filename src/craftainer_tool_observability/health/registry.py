@@ -2,7 +2,7 @@
 
 import asyncio
 
-from health.base import HealthCheck, HealthCheckResult
+from craftainer_tool_observability.health.base import HealthCheck, HealthCheckResult
 
 
 class HealthRegistry:
