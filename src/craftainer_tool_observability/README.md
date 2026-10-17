@@ -9,12 +9,11 @@ imports from `app`.
 The generic health check framework: the check interface, a registry
 that runs a set of checks concurrently, and a router factory exposing
 `/live` (liveness — no dependency checks) and `/ready` (readiness — runs
-every registered check). No external dependency beyond FastAPI itself —
-this package carries no code for any specific service (Postgres, Redis,
-S3, OIDC, ...); those concrete checks and the registry that wires them
-up live in `app.health_checks` instead (see `../app/README.md`), the
-same split as `craftainer_tool_crud/`'s generic framework vs. `app/`'s resource-specific
-code.
+every registered check). The framework itself has no external dependency
+beyond FastAPI; the generic checks for specific services live in
+`health/checks/` (see "Dependency checks" below), and the registry that
+wires them up from `Settings` lives in `app.health_checks` (see
+`../app/README.md`).
 
 Laid out as its own small MVC-ish split under one strict,
 one-directional import order — a lower layer never imports from a
@@ -43,6 +42,26 @@ graph LR
 An arrow means "may import from" — each module may depend on anything
 to its left, never anything to its right.
 
+## Dependency checks
+
+`health/checks/` holds one generic check per dependency, each taking its
+engine, URL or client as a constructor argument (never reading settings, never
+importing `app` or `craftainer_tool_crud`) and each importing its client
+library only inside its own module. A check's `name` defaults to the service
+(`postgres`, `redis`, `s3`, `http`) and can be overridden with `name=`.
+
+| Check | Module | Extra | Constructor |
+| --- | --- | --- | --- |
+| `PostgresCheck` | `checks/postgres.py` | `[sqlalchemy]` | `PostgresCheck(engine)`, an `AsyncEngine`; runs `SELECT 1` |
+| `RedisCheck` | `checks/redis.py` | `[redis]` | `RedisCheck(url)`; PINGs |
+| `S3Check` | `checks/s3.py` | `[s3]` | `S3Check(client)`, a boto3 S3 client; calls `ListBuckets` in a thread |
+| `HTTPCheck` | `checks/http.py` | `[http]` | `HTTPCheck(url, timeout=5)`; GETs the full URL (e.g. an OIDC discovery document) |
+
+Each catches its own client library's errors, logs them, and returns an
+unhealthy `HealthCheckResult` carrying only a fixed detail string (the real
+exception text can embed credentials, so it goes to the logs only; `/ready` is
+unauthenticated).
+
 ## logs
 
 `logs.py`'s `configure_logging()` attaches a JSON-formatting stdout handler to the
@@ -54,18 +73,17 @@ nor its settings. See `../app/README.md`'s "Structured logging / OTEL" section.
 
 ## Do
 
-- Keep this package's only import beyond the standard library and
-  FastAPI itself at zero — a concrete, service-specific check (with its
-  own client-library dependency) belongs in `app.health_checks`
-  instead, built on `HealthCheck`/`HealthCheckResult` from here.
+- Keep `health/`'s framework modules (`base`, `registry`, `router`) free of
+  any import beyond the standard library and FastAPI; a service-specific
+  check (with its own client library) goes in its own `health/checks/`
+  module, built on `HealthCheck`/`HealthCheckResult`.
 
 ## Don't
 
-- Add a concrete, service-specific `HealthCheck` implementation here —
-  that's resource-agnostic-in-name only; a real check always depends on
-  some specific external service's client library, which belongs in
-  `app.health_checks`, not this package.
+- Add a service-specific `HealthCheck` outside `health/checks/`, or make a
+  check read settings; wiring from `Settings` (and `MODE=mock` fakes) belongs
+  in `app.health_checks`.
 - Let one check's failure raise out of `HealthRegistry.run_all` —
-  that's `app.health_checks`'s job (each concrete check catches its own
-  service's exceptions and returns an unhealthy `HealthCheckResult`
-  instead), not something this generic collector enforces itself.
+  that's each check's job (it catches its own service's exceptions and
+  returns an unhealthy `HealthCheckResult` instead), not something this
+  generic collector enforces itself.
