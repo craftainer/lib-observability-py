@@ -7,7 +7,8 @@ protocol, compression, certificate) are read directly by OTLPLogExporter() itsel
 not re-modeled as application settings -- OTEL's env-var convention is already the
 single source of truth for those, vendor-neutral. That includes the exported
 `service.name`, which `Resource.create()` takes from OTEL_SERVICE_NAME on its own.
-When a span is active, every JSON line also carries `trace_id`/`span_id`.
+When a span is active, every JSON line also carries `trace_id`/`span_id`; inside a request
+with `RequestIDMiddleware` it also carries `request_id`.
 This module imports nothing from `app`.
 
 `_JSONFormatter.format`/`_redact_extra` are `# pragma: no cover` for tests/e2e
@@ -36,6 +37,8 @@ from opentelemetry.instrumentation.logging.handler import LoggingHandler
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
+
+from craftainer_tool_observability.middleware import get_request_id
 
 _RESERVED_LOG_RECORD_ATTRS = frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__dict__)
 
@@ -112,6 +115,9 @@ class _JSONFormatter(logging.Formatter):
         if span_context.is_valid:
             payload["trace_id"] = trace.format_trace_id(span_context.trace_id)
             payload["span_id"] = trace.format_span_id(span_context.span_id)
+        request_id = get_request_id()
+        if request_id is not None:
+            payload["request_id"] = request_id
         if record.exc_info is not None:
             payload["exception"] = self.formatException(record.exc_info)
         return json.dumps(payload, default=str)

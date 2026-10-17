@@ -1,8 +1,8 @@
 # craftainer_tool_observability/
 
 Observability building blocks `app` wires in: `health/` (the generic health
-check framework), `logs.py` (structured logging) and `otel.py` (traces and
-metrics), described below. None imports from `app`.
+check framework), `logs.py` (structured logging), `otel.py` (traces and
+metrics), `middleware.py` (request IDs) and `profiling.py`, described below. None imports from `app`.
 
 ## health/
 
@@ -128,6 +128,33 @@ histogram_quantile(0.95, sum by (service_version, le) (rate(http_server_request_
 
 (Without the opt-in, the metric is `http_server_duration_milliseconds_*` and the status
 label is `http_status_code`.)
+
+## Request ID
+
+`middleware.py`'s `RequestIDMiddleware` (pure ASGI; `app.add_middleware(RequestIDMiddleware)`,
+optional `header_name=`, default `X-Request-ID`) reads the request's ID header or creates a
+UUID4 hex one, accepts only 1-128 characters from `[A-Za-z0-9._-]` (anything else is replaced, so a
+client can't inject into log lines), echoes it on the response and stores it in a
+ContextVar: `get_request_id() -> str | None`. `logs.py`'s JSON lines then carry `request_id`.
+When OpenTelemetry is importable and a span is recording, the ID is also set on it as
+`http.request.header.x-request-id` (OTel's generic request-header attribute, a string
+array). Add the middleware so it runs inside the OTel server instrumentation, otherwise
+no server span is active yet.
+
+## /health/info (opt-in)
+
+`build_health_router(get_registry, include_info=True)` also exposes `/info`, returning
+`{"version", "commit"}` from the `APP_VERSION` / `APP_COMMIT` env vars (the version falls back to
+the metadata of the distribution named by `info_package=`; unknown values are `null`).
+Off by default because it discloses the version.
+
+## Profiling (opt-in)
+
+`profiling.py`'s `install_profiling(app, *, enabled, production, query_param="profile")` does nothing
+unless `enabled`, and raises `ProfilingDisabledError` when `enabled` and `production` are both true
+(the caller passes its own mode in; this package never imports `app`). When enabled, a
+request with `?profile=1` runs under pyinstrument and answers with the HTML report instead of its
+normal response. `pyinstrument` (the `[profiling]` extra or dev dependency) is imported lazily.
 
 ## Do
 
