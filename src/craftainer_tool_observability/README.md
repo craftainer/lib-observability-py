@@ -1,8 +1,8 @@
 # craftainer_tool_observability/
 
 Observability building blocks `app` wires in: `health/` (the generic health
-check framework) and `logs.py` (structured logging), described below. Neither
-imports from `app`.
+check framework), `logs.py` (structured logging) and `otel.py` (traces and
+metrics), described below. None imports from `app`.
 
 ## health/
 
@@ -70,6 +70,64 @@ root logger (with credential-shaped `extra=` keys redacted) and, when
 exporter. The OTel `service.name` comes from OTel's standard `OTEL_SERVICE_NAME`
 env var (`Resource.create()` reads it itself); the module imports neither `app`
 nor its settings. See `../app/README.md`'s "Structured logging / OTEL" section.
+
+## Telemetry
+
+`otel.py` adds traces and metrics next to `logs.py`'s log export (`[otel]` extra;
+`[sqlalchemy]` for the engine part). The app calls three functions:
+`configure_telemetry()` (tracer and meter providers, idempotent),
+`instrument_app(app)` (server spans and request metrics) and
+`instrument_engine(engine)` (query spans and connection-pool metrics). All three are
+no-ops unless telemetry is configured. All three signals share one `Resource`
+(`logs.shared_resource()`); metrics and traces are pushed over OTLP/HTTP, and there is
+no `/metrics` endpoint. The SQLAlchemy instrumentation already emits pool usage
+(`db.client.connections.usage`, `state` = `idle`/`used`), so there are no extra gauges.
+Every JSON log line carries `trace_id`/`span_id` while a span is active.
+
+Only OTel's own environment variables configure it (`ADR-0007`):
+
+| Variable | Effect |
+| --- | --- |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | The on switch. Unset means nothing is set up. |
+| `OTEL_SDK_DISABLED=true` | Kill switch for all three signals. |
+| `OTEL_TRACES_EXPORTER` / `OTEL_METRICS_EXPORTER` / `OTEL_LOGS_EXPORTER` | `none` turns that one signal off (default `otlp`). |
+| `OTEL_TRACES_SAMPLER` (+ `_ARG`) | Sampling, read by the SDK. |
+| `OTEL_METRIC_EXPORT_INTERVAL` | Metric push interval in ms, read by the SDK. |
+| `OTEL_PYTHON_FASTAPI_EXCLUDED_URLS` | Routes left out of traces and metrics. Unset means `/health/.*`. |
+| `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` | `service.name` and any other resource attribute. |
+| `APP_VERSION` | `service.version`, unless `OTEL_RESOURCE_ATTRIBUTES` already sets it. |
+| `OTEL_SEMCONV_STABILITY_OPT_IN=http` | Emit the stable `http.server.request.duration` instead of the legacy `http.server.duration`. |
+
+### Scaling metric (KEDA)
+
+Set `OTEL_RESOURCE_ATTRIBUTES=k8s.pod.name=$(POD_NAME)` on the pod, with `POD_NAME`
+from the Downward API (`fieldRef: metadata.name`), so metrics can be split per pod.
+After Prometheus's OTLP name translation `http.server.active_requests` becomes
+`http_server_active_requests`. An example query for KEDA's Prometheus scaler (average
+in-flight requests per pod):
+
+```promql
+avg(sum by (k8s_pod_name) (http_server_active_requests{service_name="app"}))
+```
+
+Set the scaler `threshold` to about 60-70% of the per-pod capacity measured at the
+reference budget (1 vCPU / 2 GB).
+
+### Canary analysis (per `service_version`)
+
+Pass the release version as `APP_VERSION` (same value as the OCI version label); it
+becomes `service.version`, which Prometheus exposes as `service_version`. With
+`OTEL_SEMCONV_STABILITY_OPT_IN=http`, the 5xx error ratio and p95 latency per version are:
+
+```promql
+sum by (service_version) (rate(http_server_request_duration_seconds_count{http_response_status_code=~"5.."}[5m]))
+  / sum by (service_version) (rate(http_server_request_duration_seconds_count[5m]))
+
+histogram_quantile(0.95, sum by (service_version, le) (rate(http_server_request_duration_seconds_bucket[5m])))
+```
+
+(Without the opt-in, the metric is `http_server_duration_milliseconds_*` and the status
+label is `http_status_code`.)
 
 ## Do
 

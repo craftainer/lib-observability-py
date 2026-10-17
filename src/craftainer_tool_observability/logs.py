@@ -1,12 +1,13 @@
 """Structured stdout logging, optionally bridged to an OTEL collector.
 
 Always logs structured JSON to stdout; additionally exports logs via OTLP when
-OTEL_EXPORTER_OTLP_ENDPOINT is set. Logs only -- no tracing/metrics instrumentation,
-since that's the only signal asked for. OTEL's own env vars (endpoint, headers,
+OTEL_EXPORTER_OTLP_ENDPOINT is set. Traces and metrics live in `otel.py`,
+which shares this module's `shared_resource()`. OTEL's own env vars (endpoint, headers,
 protocol, compression, certificate) are read directly by OTLPLogExporter() itself,
 not re-modeled as application settings -- OTEL's env-var convention is already the
 single source of truth for those, vendor-neutral. That includes the exported
 `service.name`, which `Resource.create()` takes from OTEL_SERVICE_NAME on its own.
+When a span is active, every JSON line also carries `trace_id`/`span_id`.
 This module imports nothing from `app`.
 
 `_JSONFormatter.format`/`_redact_extra` are `# pragma: no cover` for tests/e2e
@@ -25,8 +26,10 @@ import logging
 import os
 import sys
 from datetime import UTC, datetime
+from functools import lru_cache
 from typing import Any
 
+from opentelemetry import trace
 from opentelemetry._logs import set_logger_provider
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.instrumentation.logging.handler import LoggingHandler
@@ -51,6 +54,38 @@ _REDACTED_EXTRA_KEY_SUBSTRINGS = (
 )
 
 
+def otlp_enabled() -> bool:
+    """Whether OTLP telemetry is on: an endpoint is set and `OTEL_SDK_DISABLED` isn't true."""
+    if not os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+        return False
+    return os.environ.get("OTEL_SDK_DISABLED", "").strip().lower() != "true"
+
+
+def exporter_enabled(signal: str) -> bool:
+    """Whether `OTEL_<SIGNAL>_EXPORTER` (`traces`/`metrics`/`logs`) allows OTLP export.
+
+    Unset means `otlp` (the OTel default); `none` switches that one signal off.
+    """
+    value = os.environ.get(f"OTEL_{signal.upper()}_EXPORTER", "otlp")
+    names = {name.strip().lower() for name in value.split(",")}
+    return "none" not in names
+
+
+@lru_cache(maxsize=1)
+def shared_resource() -> Resource:
+    """The one `Resource` all three signals share.
+
+    `service.name` comes from `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES` (read by
+    `Resource.create()` itself). `service.version` comes from `APP_VERSION`, unless
+    `OTEL_RESOURCE_ATTRIBUTES` already sets it (the environment variable wins).
+    """
+    resource = Resource.create()
+    version = os.environ.get("APP_VERSION")
+    if version and "service.version" not in resource.attributes:
+        resource = resource.merge(Resource({"service.version": version}))
+    return resource
+
+
 def _redact_extra(key: str, value: Any) -> Any:  # noqa: ANN401 # pragma: no cover -- see docstring
     """Replace `value` with a placeholder if `key` looks like it holds a credential."""
     lowered = key.lower()
@@ -73,6 +108,10 @@ class _JSONFormatter(logging.Formatter):
         for key, value in record.__dict__.items():
             if key not in _RESERVED_LOG_RECORD_ATTRS:
                 payload[key] = _redact_extra(key, value)
+        span_context = trace.get_current_span().get_span_context()
+        if span_context.is_valid:
+            payload["trace_id"] = trace.format_trace_id(span_context.trace_id)
+            payload["span_id"] = trace.format_span_id(span_context.span_id)
         if record.exc_info is not None:
             payload["exception"] = self.formatException(record.exc_info)
         return json.dumps(payload, default=str)
@@ -86,7 +125,7 @@ def configure_logging() -> None:
     handler.setFormatter(_JSONFormatter())
     root.addHandler(handler)
 
-    if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):  # pragma: no cover -- see below
+    if otlp_enabled() and exporter_enabled("logs"):  # pragma: no cover -- see below
         _configure_otel_logging(root)
 
 
@@ -98,7 +137,7 @@ def _configure_otel_logging(root: logging.Logger) -> None:  # pragma: no cover
     branch can never run there -- tests/unit/craftainer_tool_observability/test_logs.py exercises it
     directly (via monkeypatch.setenv) and still counts toward its own 95% gate.
     """
-    provider = LoggerProvider(resource=Resource.create())
+    provider = LoggerProvider(resource=shared_resource())
     provider.add_log_record_processor(BatchLogRecordProcessor(OTLPLogExporter()))
     set_logger_provider(provider)
     root.addHandler(LoggingHandler(logger_provider=provider))
