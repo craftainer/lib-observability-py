@@ -4,6 +4,9 @@ Fully generic -- no app.main, no concrete check, nothing beyond
 craftainer_tool_observability.health itself and FastAPI.
 """
 
+from importlib import metadata
+
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -55,3 +58,43 @@ def test_ready_when_a_check_fails() -> None:
     response = _client(healthy=False).get("/ready")
     assert response.status_code == 503
     assert response.json()["status"] == "degraded"
+
+
+def _info_client(*, include_info: bool, info_package: str | None = None) -> TestClient:
+    """Build a standalone app whose router has /info on or off."""
+    app = FastAPI()
+    app.include_router(
+        build_health_router(HealthRegistry, include_info=include_info, info_package=info_package)
+    )
+    return TestClient(app)
+
+
+def test_info_is_absent_by_default() -> None:
+    """GET /info is a 404 unless the router was built with include_info=True."""
+    assert _info_client(include_info=False).get("/info").status_code == 404
+
+
+def test_info_reports_env_version_and_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """APP_VERSION and APP_COMMIT are reported verbatim."""
+    monkeypatch.setenv("APP_VERSION", "1.2.3")
+    monkeypatch.setenv("APP_COMMIT", "abc123")
+    response = _info_client(include_info=True).get("/info")
+    assert response.json() == {"version": "1.2.3", "commit": "abc123"}
+
+
+def test_info_falls_back_to_package_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without APP_VERSION the installed distribution's version is used; no commit is null."""
+    monkeypatch.delenv("APP_VERSION", raising=False)
+    monkeypatch.delenv("APP_COMMIT", raising=False)
+    response = _info_client(include_info=True, info_package="pytest").get("/info")
+    assert response.json() == {"version": metadata.version("pytest"), "commit": None}
+
+
+@pytest.mark.parametrize("package", [None, "no-such-distribution-xyz"])
+def test_info_version_is_null_when_unknown(
+    monkeypatch: pytest.MonkeyPatch, package: str | None
+) -> None:
+    """No env var and no (or an unknown) package gives a null version."""
+    monkeypatch.delenv("APP_VERSION", raising=False)
+    response = _info_client(include_info=True, info_package=package).get("/info")
+    assert response.json()["version"] is None

@@ -9,6 +9,7 @@ import pytest
 from opentelemetry.instrumentation.logging.handler import LoggingHandler
 
 from craftainer_tool_observability.logs import _JSONFormatter, configure_logging
+from craftainer_tool_observability.middleware import _request_id
 
 
 @pytest.fixture
@@ -75,3 +76,15 @@ def test_configure_logging_adds_otel_handler_when_endpoint_set(
     configure_logging()
     root = logging.getLogger()
     assert any(isinstance(h, LoggingHandler) for h in root.handlers)
+
+
+def test_json_formatter_includes_request_id_when_set() -> None:
+    """A request ID in the ContextVar appears as `request_id`; absent otherwise."""
+    record = logging.LogRecord("app.test", logging.INFO, __file__, 1, "hello", (), None)
+    assert "request_id" not in json.loads(_JSONFormatter().format(record))
+    token = _request_id.set("req-1")
+    try:
+        payload = json.loads(_JSONFormatter().format(record))
+    finally:
+        _request_id.reset(token)
+    assert payload["request_id"] == "req-1"
