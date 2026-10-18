@@ -10,16 +10,6 @@ single source of truth for those, vendor-neutral. That includes the exported
 When a span is active, every JSON line also carries `trace_id`/`span_id`; inside a request
 with `RequestIDMiddleware` it also carries `request_id`.
 This module imports nothing from `app`.
-
-`_JSONFormatter.format`/`_redact_extra` are `# pragma: no cover` for tests/e2e
-specifically: app.oidc/app.problem_details/craftainer_tool_crud.controllers.crud_actions do call
-`logging.getLogger(...).warning/info/exception` on the real HTTP stack now, but
-none of them pass a credential-shaped `extra=` key or (outside a genuine bug) an
-unhandled exception, so `format`'s extra-field/exception branches and
-`_redact_extra`'s redaction branch specifically never run through a live request.
-tests/unit/craftainer_tool_observability/test_logs.py exercises both directly and still counts
-toward its
-own 95% gate.
 """
 
 import json
@@ -92,7 +82,7 @@ def shared_resource() -> Resource:
     return resource
 
 
-def _redact_extra(key: str, value: Any) -> Any:  # noqa: ANN401 # pragma: no cover -- see docstring
+def _redact_extra(key: str, value: Any) -> Any:  # noqa: ANN401
     """Replace `value` with a placeholder if `key` looks like it holds a credential."""
     lowered = key.lower()
     if any(substring in lowered for substring in _REDACTED_EXTRA_KEY_SUBSTRINGS):
@@ -103,7 +93,7 @@ def _redact_extra(key: str, value: Any) -> Any:  # noqa: ANN401 # pragma: no cov
 class _JSONFormatter(logging.Formatter):
     """Renders one JSON object per line: timestamp, level, logger, message, extras."""
 
-    def format(self, record: logging.LogRecord) -> str:  # pragma: no cover -- see module docstring
+    def format(self, record: logging.LogRecord) -> str:
         """Serialize the record as a single-line JSON object."""
         payload: dict[str, Any] = {
             "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
@@ -137,21 +127,23 @@ def configure_logging() -> None:
     # the app; hand its loggers over to the root handlers so they are JSON too.
     for name in _UVICORN_LOGGERS:
         uvicorn_logger = logging.getLogger(name)
+        if (
+            name == "uvicorn.access"
+            and not uvicorn_logger.handlers
+            and not uvicorn_logger.propagate
+        ):
+            # uvicorn's `--no-access-log` / UVICORN_ACCESS_LOG=false leaves exactly this
+            # state (no handlers, propagate=False); re-routing it would re-enable the lines.
+            continue
         uvicorn_logger.handlers.clear()
         uvicorn_logger.propagate = True
 
-    if otlp_enabled() and exporter_enabled("logs"):  # pragma: no cover -- see below
+    if otlp_enabled() and exporter_enabled("logs"):
         _configure_otel_logging(root)
 
 
-def _configure_otel_logging(root: logging.Logger) -> None:  # pragma: no cover
-    """Bridge the root logger to an OTLP log exporter.
-
-    `# pragma: no cover` above is for tests/e2e specifically: its live process
-    never sets OTEL_EXPORTER_OTLP_ENDPOINT (see .devcontainer/compose.yml), so this
-    branch can never run there -- tests/unit/craftainer_tool_observability/test_logs.py exercises it
-    directly (via monkeypatch.setenv) and still counts toward its own 95% gate.
-    """
+def _configure_otel_logging(root: logging.Logger) -> None:
+    """Bridge the root logger to an OTLP log exporter."""
     provider = LoggerProvider(resource=shared_resource())
     provider.add_log_record_processor(BatchLogRecordProcessor(OTLPLogExporter()))
     set_logger_provider(provider)

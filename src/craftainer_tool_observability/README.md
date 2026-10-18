@@ -1,8 +1,8 @@
 # craftainer_tool_observability/
 
-Observability building blocks `app` wires in: `health/` (the generic health
+Observability building blocks an application wires in: `health/` (the generic health
 check framework), `logs.py` (structured logging), `otel.py` (traces and
-metrics), `middleware.py` (request IDs) and `profiling.py`, described below. None imports from `app`.
+metrics), `middleware.py` (request IDs) and `profiling.py`, described below. None imports from an application package.
 
 ## health/
 
@@ -12,8 +12,7 @@ that runs a set of checks concurrently, and a router factory exposing
 every registered check). The framework itself has no external dependency
 beyond FastAPI; the generic checks for specific services live in
 `health/checks/` (see "Dependency checks" below), and the registry that
-wires them up from `Settings` lives in `app.health_checks` (see
-`../app/README.md`).
+wires them up from settings lives in the application, not here.
 
 Laid out as its own small MVC-ish split under one strict,
 one-directional import order — a lower layer never imports from a
@@ -31,8 +30,7 @@ manual/pre-push stage, same as mypy).
 - `router.py` — `build_health_router(get_registry)`, a factory that
   builds the `/live`/`/ready` router against whatever
   `Callable[..., HealthRegistry]` the caller passes in as a FastAPI
-  dependency — see `app.main`'s `build_health_router(get_health_registry)`
-  call for the wiring.
+  dependency.
 
 ```mermaid
 graph LR
@@ -46,7 +44,7 @@ to its left, never anything to its right.
 
 `health/checks/` holds one generic check per dependency, each taking its
 engine, URL or client as a constructor argument (never reading settings, never
-importing `app` or `craftainer_tool_crud`) and each importing its client
+importing an application package or `craftainer_tool_crud`) and each importing its client
 library only inside its own module. A check's `name` defaults to the service
 (`postgres`, `redis`, `s3`, `http`) and can be overridden with `name=`.
 
@@ -69,12 +67,12 @@ root logger (with credential-shaped `extra=` keys redacted) and, when
 `OTEL_EXPORTER_OTLP_ENDPOINT` is set, bridges the root logger to an OTLP log
 exporter. The OTel `service.name` comes from OTel's standard `OTEL_SERVICE_NAME`
 env var (`Resource.create()` reads it itself); the module imports neither `app`
-nor its settings. See `../app/README.md`'s "Structured logging / OTEL" section.
+nor its settings.
 
 ## Telemetry
 
 `otel.py` adds traces and metrics next to `logs.py`'s log export (`[otel]` extra;
-`[sqlalchemy]` for the engine part). The app calls three functions:
+`[sqlalchemy]` for the engine part). The application calls three functions:
 `configure_telemetry()` (tracer and meter providers, idempotent),
 `instrument_app(app)` (server spans and request metrics) and
 `instrument_engine(engine)` (query spans and connection-pool metrics). All three are
@@ -152,9 +150,9 @@ Off by default because it discloses the version.
 
 `profiling.py`'s `install_profiling(app, *, enabled, production, query_param="profile")` does nothing
 unless `enabled`, and raises `ProfilingDisabledError` when `enabled` and `production` are both true
-(the caller passes its own mode in; this package never imports `app`). When enabled, a
+(the caller passes its own mode in; this package never imports an application package). When enabled, a
 request with `?profile=1` runs under pyinstrument and answers with the HTML report instead of its
-normal response. `pyinstrument` (the `[profiling]` extra or dev dependency) is imported lazily.
+normal response. `pyinstrument` (the `[profiling]` extra) is imported lazily.
 
 ## Do
 
@@ -166,8 +164,7 @@ normal response. `pyinstrument` (the `[profiling]` extra or dev dependency) is i
 ## Don't
 
 - Add a service-specific `HealthCheck` outside `health/checks/`, or make a
-  check read settings; wiring from `Settings` (and `MODE=mock` fakes) belongs
-  in `app.health_checks`.
+  check read settings; wiring from settings (and mock fakes) belongs in the application.
 - Let one check's failure raise out of `HealthRegistry.run_all` —
   that's each check's job (it catches its own service's exceptions and
   returns an unhealthy `HealthCheckResult` instead), not something this

@@ -1,8 +1,6 @@
 """HTTP health check (the `http` extra), e.g. for an OIDC discovery document.
 
-The failure branch is `# pragma: no cover` for tests/e2e specifically: proving it
-requires actually breaking the live shared Keycloak, which isn't a trade worth
-making for a smoke-test suite -- the unit tests fake the client to exercise it.
+The unit tests fake the client to exercise the failure branch.
 """
 
 import logging
@@ -30,7 +28,7 @@ class HTTPCheck:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 response = await client.get(self._url)
                 response.raise_for_status()
-        except httpx.HTTPError:  # pragma: no cover -- see module docstring
+        except httpx.HTTPError:
             logger.exception("HTTP health check failed")
             return HealthCheckResult(self.name, healthy=False, detail=UNHEALTHY_DETAIL)
         return HealthCheckResult(self.name, healthy=True)

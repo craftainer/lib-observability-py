@@ -1,8 +1,6 @@
 """Redis health check (the `redis` extra).
 
-The failure branch is `# pragma: no cover` for tests/e2e specifically: proving it
-requires actually breaking the live shared Redis, which isn't a trade worth
-making for a smoke-test suite -- the unit tests fake the client to exercise it.
+The unit tests fake the client to exercise the failure branch.
 """
 
 import logging
@@ -29,7 +27,7 @@ class RedisCheck:
         client = Redis.from_url(self._url)
         try:
             await client.ping()
-        except RedisError:  # pragma: no cover -- see module docstring
+        except RedisError:
             logger.exception("Redis health check failed")
             return HealthCheckResult(self.name, healthy=False, detail=UNHEALTHY_DETAIL)
         finally:

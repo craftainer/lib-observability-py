@@ -1,15 +1,37 @@
 # Project metadata, dependencies, and every linter/type-checker/test-runner
 # config live here, in one file.
 [project]
-name = "template-python-package"
+name = "craftainer-tool-observability"
 # Single source of the version. Stays 0.0.0 in git: release.yml's tag is the
 # real version, stamped into the build at release time without a commit.
 version = "0.0.0"
-description = "Template repository for publishable Python packages"
+description = "Health checks, structured logging, OpenTelemetry, request IDs and profiling for FastAPI services"
 license = "GPL-3.0-or-later"
 readme = "README.md"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "fastapi>=0.141.1,<1",
+]
+
+# Every extra is optional: the core (health framework, request-ID middleware)
+# needs FastAPI only. Each extra's modules import their library lazily or are
+# only imported by the caller that opted in (see README.md).
+[project.optional-dependencies]
+# logs.py and otel.py (they also import sqlalchemy's AsyncEngine for typing).
+otel = [
+    "opentelemetry-sdk>=1.44.0,<2",
+    "opentelemetry-exporter-otlp-proto-http>=1.44.0,<2",
+    "opentelemetry-instrumentation-logging>=0.65b0,<1",
+    "opentelemetry-instrumentation-fastapi>=0.65b0,<1",
+    "opentelemetry-instrumentation-sqlalchemy>=0.65b0,<1",
+    "sqlalchemy[asyncio]>=2.0.54,<2.1",
+]
+# Upper bound: opentelemetry-instrumentation-sqlalchemy supports < 2.1 only.
+sqlalchemy = ["sqlalchemy[asyncio]>=2.0.54,<2.1"]
+redis = ["redis>=8.1.0,<9"]
+s3 = ["boto3>=1.43.98,<2"]
+http = ["httpx>=0.28.1,<1"]
+profiling = ["pyinstrument>=5.1.3,<6"]
 
 [dependency-groups]
 # Installed by a plain `uv sync` (uv's default group).
@@ -17,11 +39,17 @@ dev = [
     "ruff==0.16.8",
     "mypy==2.3.1",
     "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
     "pytest-cov==7.1.0",
     "pytest-benchmark==5.3.0",
     "pytest-codspeed==5.0.3",
     "import-linter==2.15",
     "pip-audit==2.10.1",
+    "boto3-stubs[s3]==1.43.98",
+    # starlette.testclient (used by the tests) wants httpx2.
+    "httpx2==2.13.0",
+    # The unit tests exercise every extra.
+    "craftainer-tool-observability[otel,sqlalchemy,redis,s3,http,profiling]",
 ]
 
 [build-system]
@@ -29,7 +57,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/template_python_package"]
+packages = ["src/craftainer_tool_observability"]
 
 [tool.ruff]
 line-length = 100
@@ -49,25 +77,33 @@ select = [
 ignore = ["COM812", "ISC001"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["template_python_package"]
+known-first-party = ["craftainer_tool_observability"]
 
 [tool.ruff.lint.per-file-ignores]
 # assert is the point of a test; comparing to literal values is not a magic number.
 "tests/**" = ["S101", "PLR2004"]
 
 [tool.importlinter]
-root_packages = ["template_python_package"]
+root_packages = ["craftainer_tool_observability"]
+# Needed so the forbidden contract below can name packages that are not part of this
+# distribution (app, craftainer_tool_crud).
+include_external_packages = true
 
-# The example package has two layers: `api` (the public surface) sits above
-# `core` (pure logic). A layer may import a layer listed after it, never one
-# listed before it, so core can never grow a dependency on api. Add layers to
-# this list as the package grows; the hook then keeps the dependency direction
-# honest.
+# health/ is a small one-directional stack: router sits above registry above
+# base. A layer may import a layer listed after it, never one listed before it.
 [[tool.importlinter.contracts]]
-name = "template_python_package layers"
+name = "health layers"
 type = "layers"
-containers = ["template_python_package"]
-layers = ["api", "core"]
+containers = ["craftainer_tool_observability.health"]
+layers = ["router", "registry", "base"]
+
+# This package is a dependency of apps and of tool-crud's consumers, never the
+# other way round.
+[[tool.importlinter.contracts]]
+name = "observability never imports app or crud"
+type = "forbidden"
+source_modules = ["craftainer_tool_observability"]
+forbidden_modules = ["app", "craftainer_tool_crud"]
 
 [tool.mypy]
 python_version = "3.14"
@@ -79,12 +115,20 @@ cache_dir = "/home/vscode/.cache/mypy"
 [tool.pytest.ini_options]
 cache_dir = "/home/vscode/.cache/pytest"
 # tests/bench is run explicitly: `uv run pytest tests/bench --no-cov`.
-addopts = "--strict-markers --strict-config -ra --ignore=tests/bench --cov=template_python_package --cov-report=term-missing"
+addopts = "--strict-markers --strict-config -ra --ignore=tests/bench --cov=craftainer_tool_observability --cov-report=term-missing"
 testpaths = ["tests/unit"]
-filterwarnings = ["error"]
+# Lets an `async def test_...` run without a per-test @pytest.mark.asyncio marker.
+asyncio_mode = "auto"
+filterwarnings = [
+    "error",
+    # starlette's testclient still references the anyio.abc.BlockingPortal alias
+    # that anyio deprecated in favor of anyio.from_thread.BlockingPortal -- a
+    # starlette bug, not ours to fix here.
+    "ignore:The anyio\\.abc\\.BlockingPortal alias is deprecated.*:DeprecationWarning:starlette\\.testclient",
+]
 
 [tool.coverage.run]
-source = ["template_python_package"]
+source = ["craftainer_tool_observability"]
 branch = true
 relative_files = true
 data_file = "/home/vscode/.cache/coverage/.coverage"
