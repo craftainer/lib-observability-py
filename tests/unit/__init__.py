@@ -1,1 +1,1 @@
-"""Marks `tests.unit` as a package."""
+"""Unit tests for craftainer_tool_observability."""
