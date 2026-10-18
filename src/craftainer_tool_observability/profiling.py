@@ -79,7 +79,9 @@ def install_profiling(
     """
     if not enabled:
         return
-    if production:
+    # e2e-unreachable: a production process can't boot under the e2e env; covered by
+    # tests/unit/craftainer_tool_observability/test_profiling.py
+    if production:  # pragma: no cover
         msg = "request profiling must not be enabled in production"
         raise ProfilingDisabledError(msg)
     import pyinstrument  # noqa: F401, PLC0415 # fail early and clearly if the extra is missing

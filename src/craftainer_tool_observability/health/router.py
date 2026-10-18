@@ -18,11 +18,13 @@ def _package_version(package: str | None) -> str | None:
     """`APP_VERSION` if set, else the installed distribution's version, else None."""
     if version := os.environ.get("APP_VERSION"):
         return version
-    if package is None:
+    # e2e-unreachable: the app always names its installed distribution; covered by
+    # tests/unit/craftainer_tool_observability/health/
+    if package is None:  # pragma: no cover
         return None
     try:
         return metadata.version(package)
-    except metadata.PackageNotFoundError:
+    except metadata.PackageNotFoundError:  # pragma: no cover
         return None
 
 
