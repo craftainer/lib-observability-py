@@ -1,8 +1,6 @@
 """S3 health check (the `s3` extra).
 
-The failure branch is `# pragma: no cover` for tests/e2e specifically: proving it
-requires actually breaking the live shared S3 service, which isn't a trade worth
-making for a smoke-test suite -- the unit tests fake the client to exercise it.
+The unit tests fake the client to exercise the failure branch.
 """
 
 import asyncio
@@ -38,7 +36,7 @@ class S3Check:
         """Call ListBuckets in a thread and report whether it succeeded."""
         try:
             await asyncio.to_thread(self._client.list_buckets)
-        except BotoCoreError, ClientError:  # pragma: no cover -- see module docstring
+        except BotoCoreError, ClientError:
             logger.exception("S3 health check failed")
             return HealthCheckResult(self.name, healthy=False, detail=UNHEALTHY_DETAIL)
         return HealthCheckResult(self.name, healthy=True)

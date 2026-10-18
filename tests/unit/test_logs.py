@@ -88,3 +88,40 @@ def test_json_formatter_includes_request_id_when_set() -> None:
     finally:
         _request_id.reset(token)
     assert payload["request_id"] == "req-1"
+
+
+@pytest.fixture
+def _restore_uvicorn_loggers() -> Iterator[None]:
+    """Save/restore uvicorn's loggers' handlers and propagate flags (process-wide state)."""
+    names = ("uvicorn", "uvicorn.error", "uvicorn.access")
+    saved = {
+        n: (list(logging.getLogger(n).handlers), logging.getLogger(n).propagate) for n in names
+    }
+    yield
+    for n, (handlers, propagate) in saved.items():
+        logging.getLogger(n).handlers = handlers
+        logging.getLogger(n).propagate = propagate
+
+
+@pytest.mark.usefixtures("_clean_root_handlers", "_restore_uvicorn_loggers")
+def test_configure_logging_routes_uvicorn_loggers_to_root() -> None:
+    """With the access log on, uvicorn's own handlers are dropped and its loggers propagate."""
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        uv = logging.getLogger(name)
+        uv.handlers = [logging.NullHandler()]
+        uv.propagate = False
+    configure_logging()
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        assert logging.getLogger(name).handlers == []
+        assert logging.getLogger(name).propagate is True
+
+
+@pytest.mark.usefixtures("_clean_root_handlers", "_restore_uvicorn_loggers")
+def test_configure_logging_keeps_disabled_uvicorn_access_log_disabled() -> None:
+    """`--no-access-log` (no handlers, propagate=False) must stay exactly that way."""
+    access = logging.getLogger("uvicorn.access")
+    access.handlers = []
+    access.propagate = False
+    configure_logging()
+    assert access.handlers == []
+    assert access.propagate is False

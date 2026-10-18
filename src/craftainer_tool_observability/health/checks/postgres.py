@@ -1,8 +1,6 @@
 """Postgres health check (the `sqlalchemy` extra).
 
-The failure branch is `# pragma: no cover` for tests/e2e specifically: proving it
-requires actually breaking the live shared Postgres, which isn't a trade worth
-making for a smoke-test suite -- the unit tests fake the engine to exercise it.
+The unit tests fake the client to exercise the failure branch.
 """
 
 import logging
@@ -30,7 +28,7 @@ class PostgresCheck:
         try:
             async with self._engine.connect() as conn:
                 await conn.execute(text("SELECT 1"))
-        except SQLAlchemyError:  # pragma: no cover -- see module docstring
+        except SQLAlchemyError:
             logger.exception("Database health check failed")
             return HealthCheckResult(self.name, healthy=False, detail=UNHEALTHY_DETAIL)
         return HealthCheckResult(self.name, healthy=True)
