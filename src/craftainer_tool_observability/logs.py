@@ -57,6 +57,9 @@ _REDACTED_EXTRA_KEY_SUBSTRINGS = (
 )
 
 
+_UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
+
+
 def otlp_enabled() -> bool:
     """Whether OTLP telemetry is on: an endpoint is set and `OTEL_SDK_DISABLED` isn't true."""
     if not os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
@@ -130,6 +133,12 @@ def configure_logging() -> None:
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(_JSONFormatter())
     root.addHandler(handler)
+    # uvicorn configures its own plain-text handlers (propagate=False) before importing
+    # the app; hand its loggers over to the root handlers so they are JSON too.
+    for name in _UVICORN_LOGGERS:
+        uvicorn_logger = logging.getLogger(name)
+        uvicorn_logger.handlers.clear()
+        uvicorn_logger.propagate = True
 
     if otlp_enabled() and exporter_enabled("logs"):  # pragma: no cover -- see below
         _configure_otel_logging(root)
