@@ -1,5 +1,12 @@
 # craftainer-tool-observability
 
+> [!WARNING]
+> **`craftainer-tool-observability` is renamed to `craftainer-observability`.** Install `craftainer-observability` from PyPI and
+> import `craftainer_observability` instead of `craftainer_tool_observability`; development continues at
+> <https://github.com/craftainer/lib-observability-py>. **0.1.2 is the final release under
+> this name.** Importing this package emits a `DeprecationWarning`; the code is
+> otherwise identical to 0.1.1, so existing pins keep installing.
+
 > [!NOTE]
 > This repository is vibe coded with [Claude](https://claude.com/product/claude-code).
 

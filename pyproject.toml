@@ -121,6 +121,8 @@ testpaths = ["tests/unit"]
 asyncio_mode = "auto"
 filterwarnings = [
     "error",
+    # The renamed package warns on import by design (see test_deprecation.py).
+    "ignore:craftainer-tool-observability is renamed to.*:DeprecationWarning",
     # starlette's testclient still references the anyio.abc.BlockingPortal alias
     # that anyio deprecated in favor of anyio.from_thread.BlockingPortal -- a
     # starlette bug, not ours to fix here.
