@@ -32,7 +32,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from craftainer_tool_observability.logs import exporter_enabled, otlp_enabled, shared_resource
+from craftainer_observability.logs import exporter_enabled, otlp_enabled, shared_resource
 
 # Probes would otherwise flood traces; used only when the standard variable is unset.
 DEFAULT_EXCLUDED_URLS = "/health/.*"

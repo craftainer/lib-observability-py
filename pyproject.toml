@@ -1,7 +1,7 @@
 # Project metadata, dependencies, and every linter/type-checker/test-runner
 # config live here, in one file.
 [project]
-name = "craftainer-tool-observability"
+name = "craftainer-observability"
 # Single source of the version. Stays 0.0.0 in git: release.yml's tag is the
 # real version, stamped into the build at release time without a commit.
 version = "0.0.0"
@@ -49,7 +49,7 @@ dev = [
     # starlette.testclient (used by the tests) wants httpx2.
     "httpx2==2.13.0",
     # The unit tests exercise every extra.
-    "craftainer-tool-observability[otel,sqlalchemy,redis,s3,http,profiling]",
+    "craftainer-observability[otel,sqlalchemy,redis,s3,http,profiling]",
 ]
 
 [build-system]
@@ -57,7 +57,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/craftainer_tool_observability"]
+packages = ["src/craftainer_observability"]
 
 [tool.ruff]
 line-length = 100
@@ -77,16 +77,16 @@ select = [
 ignore = ["COM812", "ISC001"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["craftainer_tool_observability"]
+known-first-party = ["craftainer_observability"]
 
 [tool.ruff.lint.per-file-ignores]
 # assert is the point of a test; comparing to literal values is not a magic number.
 "tests/**" = ["S101", "PLR2004"]
 
 [tool.importlinter]
-root_packages = ["craftainer_tool_observability"]
+root_packages = ["craftainer_observability"]
 # Needed so the forbidden contract below can name packages that are not part of this
-# distribution (app, craftainer_tool_crud).
+# distribution (app, craftainer_crud).
 include_external_packages = true
 
 # health/ is a small one-directional stack: router sits above registry above
@@ -94,16 +94,16 @@ include_external_packages = true
 [[tool.importlinter.contracts]]
 name = "health layers"
 type = "layers"
-containers = ["craftainer_tool_observability.health"]
+containers = ["craftainer_observability.health"]
 layers = ["router", "registry", "base"]
 
-# This package is a dependency of apps and of tool-crud's consumers, never the
+# This package is a dependency of apps and of craftainer-crud's consumers, never the
 # other way round.
 [[tool.importlinter.contracts]]
 name = "observability never imports app or crud"
 type = "forbidden"
-source_modules = ["craftainer_tool_observability"]
-forbidden_modules = ["app", "craftainer_tool_crud"]
+source_modules = ["craftainer_observability"]
+forbidden_modules = ["app", "craftainer_crud"]
 
 [tool.mypy]
 python_version = "3.14"
@@ -115,7 +115,7 @@ cache_dir = "/home/vscode/.cache/mypy"
 [tool.pytest.ini_options]
 cache_dir = "/home/vscode/.cache/pytest"
 # tests/bench is run explicitly: `uv run pytest tests/bench --no-cov`.
-addopts = "--strict-markers --strict-config -ra --ignore=tests/bench --cov=craftainer_tool_observability --cov-report=term-missing"
+addopts = "--strict-markers --strict-config -ra --ignore=tests/bench --cov=craftainer_observability --cov-report=term-missing"
 testpaths = ["tests/unit"]
 # Lets an `async def test_...` run without a per-test @pytest.mark.asyncio marker.
 asyncio_mode = "auto"
@@ -128,7 +128,7 @@ filterwarnings = [
 ]
 
 [tool.coverage.run]
-source = ["craftainer_tool_observability"]
+source = ["craftainer_observability"]
 branch = true
 relative_files = true
 data_file = "/home/vscode/.cache/coverage/.coverage"

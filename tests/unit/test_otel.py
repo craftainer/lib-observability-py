@@ -24,8 +24,8 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from craftainer_tool_observability import otel
-from craftainer_tool_observability.logs import (
+from craftainer_observability import otel
+from craftainer_observability.logs import (
     _JSONFormatter,
     exporter_enabled,
     otlp_enabled,
