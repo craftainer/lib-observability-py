@@ -8,8 +8,8 @@ from collections.abc import Iterator
 import pytest
 from opentelemetry.instrumentation.logging.handler import LoggingHandler
 
-from craftainer_tool_observability.logs import _JSONFormatter, configure_logging
-from craftainer_tool_observability.middleware import _request_id
+from craftainer_observability.logs import _JSONFormatter, configure_logging
+from craftainer_observability.middleware import _request_id
 
 
 @pytest.fixture

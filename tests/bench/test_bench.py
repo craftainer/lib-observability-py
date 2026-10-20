@@ -6,9 +6,9 @@ import logging
 
 from pytest_benchmark.fixture import BenchmarkFixture
 
-from craftainer_tool_observability.health.base import HealthCheckResult
-from craftainer_tool_observability.health.registry import HealthRegistry
-from craftainer_tool_observability.logs import _JSONFormatter
+from craftainer_observability.health.base import HealthCheckResult
+from craftainer_observability.health.registry import HealthRegistry
+from craftainer_observability.logs import _JSONFormatter
 
 
 class _OkCheck:

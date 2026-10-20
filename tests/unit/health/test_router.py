@@ -1,7 +1,7 @@
 """Unit test: build_health_router's /live and /ready, against a fake HealthRegistry provider.
 
 Fully generic -- no app.main, no concrete check, nothing beyond
-craftainer_tool_observability.health itself and FastAPI.
+craftainer_observability.health itself and FastAPI.
 """
 
 from importlib import metadata
@@ -10,9 +10,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from craftainer_tool_observability.health.base import HealthCheckResult
-from craftainer_tool_observability.health.registry import HealthRegistry
-from craftainer_tool_observability.health.router import build_health_router
+from craftainer_observability.health.base import HealthCheckResult
+from craftainer_observability.health.registry import HealthRegistry
+from craftainer_observability.health.router import build_health_router
 
 
 class _FakeCheck:

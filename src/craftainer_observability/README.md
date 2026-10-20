@@ -1,4 +1,4 @@
-# craftainer_tool_observability/
+# craftainer_observability/
 
 Observability building blocks an application wires in: `health/` (the generic health
 check framework), `logs.py` (structured logging), `otel.py` (traces and
@@ -44,7 +44,7 @@ to its left, never anything to its right.
 
 `health/checks/` holds one generic check per dependency, each taking its
 engine, URL or client as a constructor argument (never reading settings, never
-importing an application package or `craftainer_tool_crud`) and each importing its client
+importing an application package or `craftainer_crud`) and each importing its client
 library only inside its own module. A check's `name` defaults to the service
 (`postgres`, `redis`, `s3`, `http`) and can be overridden with `name=`.
 

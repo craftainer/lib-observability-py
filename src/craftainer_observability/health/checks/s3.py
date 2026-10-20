@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING
 
 from botocore.exceptions import BotoCoreError, ClientError
 
-from craftainer_tool_observability.health.base import HealthCheckResult
-from craftainer_tool_observability.health.checks._common import UNHEALTHY_DETAIL
+from craftainer_observability.health.base import HealthCheckResult
+from craftainer_observability.health.checks._common import UNHEALTHY_DETAIL
 
 logger = logging.getLogger(__name__)
 

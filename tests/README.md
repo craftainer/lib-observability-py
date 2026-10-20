@@ -4,7 +4,7 @@ Two independent suites:
 
 - `unit/` — no external services. A plain `uv run pytest` collects only this
   directory and enforces 100% line and branch coverage of
-  `src/craftainer_tool_observability` (`[tool.coverage.report]` in
+  `src/craftainer_observability` (`[tool.coverage.report]` in
   `pyproject.toml`).
 - `bench/` — `pytest-benchmark` microbenchmarks, excluded from the default
   run (`--ignore=tests/bench` in `addopts`). Run locally with

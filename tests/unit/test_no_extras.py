@@ -27,13 +27,13 @@ _SCRIPT = textwrap.dedent(
 
     sys.meta_path.insert(0, Blocker())
 
-    import craftainer_tool_observability
-    import craftainer_tool_observability.health
-    import craftainer_tool_observability.health.base
-    import craftainer_tool_observability.health.registry
-    import craftainer_tool_observability.health.router
-    import craftainer_tool_observability.middleware
-    import craftainer_tool_observability.health.checks
+    import craftainer_observability
+    import craftainer_observability.health
+    import craftainer_observability.health.base
+    import craftainer_observability.health.registry
+    import craftainer_observability.health.router
+    import craftainer_observability.middleware
+    import craftainer_observability.health.checks
 
     assert not [m for m in sys.modules if blocked(m)]
     """
