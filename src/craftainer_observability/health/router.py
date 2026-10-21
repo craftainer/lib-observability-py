@@ -11,7 +11,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Response, status
 
-from craftainer_tool_observability.health.registry import HealthRegistry
+from craftainer_observability.health.registry import HealthRegistry
 
 
 def _package_version(package: str | None) -> str | None:

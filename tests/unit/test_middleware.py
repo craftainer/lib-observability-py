@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from opentelemetry.sdk.trace import TracerProvider
 from starlette.types import Receive, Scope, Send
 
-from craftainer_tool_observability.middleware import RequestIDMiddleware, get_request_id
+from craftainer_observability.middleware import RequestIDMiddleware, get_request_id
 
 
 def _client(header_name: str | None = None) -> TestClient:

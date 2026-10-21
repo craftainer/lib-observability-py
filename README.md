@@ -1,4 +1,4 @@
-# craftainer-tool-observability
+# craftainer-observability
 
 > [!NOTE]
 > This repository is vibe coded with [Claude](https://claude.com/product/claude-code).
@@ -12,18 +12,25 @@ instance of
 [`template-python-package`](https://github.com/craftainer/template-python-package)
 (see [`docs/TEMPLATE.md`](docs/TEMPLATE.md) for the conventions shared with
 every instance). It never imports an application package or
-`craftainer_tool_crud`; an import-linter contract enforces that.
+`craftainer_crud`; an import-linter contract enforces that.
 
 ## Install
 
-The distribution is `craftainer-tool-observability`, the import package
-`craftainer_tool_observability`. The core needs FastAPI only; everything else
+The distribution is `craftainer-observability`, the import package
+`craftainer_observability`. The core needs FastAPI only; everything else
 is an extra, so install what you use:
 
 ```sh
-pip install craftainer-tool-observability                    # health framework, request IDs
-pip install "craftainer-tool-observability[otel,redis]"      # plus tracing/metrics/logs, Redis check
+pip install craftainer-observability                    # health framework, request IDs
+pip install "craftainer-observability[otel,redis]"      # plus tracing/metrics/logs, Redis check
 ```
+
+> [!NOTE]
+> Renamed from `craftainer-tool-observability` (import
+> `craftainer_tool_observability`); the first release under the new name is
+> `0.2.0`. Install `craftainer-observability` and import
+> `craftainer_observability`. See
+> [ADR 0001](docs/adrs/0001-rename-package-to-craftainer-observability.md).
 
 | Extra | Brings | Used by |
 | --- | --- | --- |
@@ -52,12 +59,12 @@ hence the `<2.1` bound.
 | `profiling` | `install_profiling(app, *, enabled, production, query_param="profile")` |
 
 The details, environment variables and conventions are in
-[`src/craftainer_tool_observability/README.md`](src/craftainer_tool_observability/README.md).
+[`src/craftainer_observability/README.md`](src/craftainer_observability/README.md).
 
 ## Versioning
 
 SemVer, starting at `0.1.0`. While the major version is 0, a minor release may
-change the public API; pin `craftainer-tool-observability>=0.x,<0.(x+1)` until
+change the public API; pin `craftainer-observability>=0.x,<0.(x+1)` until
 1.0. Real-service integration tests for the dependency checks stay in
 `template-fastapi`; the unit tests here use fakes and need no backing service.
 

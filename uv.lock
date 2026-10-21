@@ -383,7 +383,7 @@ wheels = [
 ]
 
 [[package]]
-name = "craftainer-tool-observability"
+name = "craftainer-observability"
 version = "0.0.0"
 source = { editable = "." }
 dependencies = [
@@ -418,7 +418,7 @@ sqlalchemy = [
 [package.dev-dependencies]
 dev = [
     { name = "boto3-stubs", extra = ["s3"] },
-    { name = "craftainer-tool-observability", extra = ["http", "otel", "profiling", "redis", "s3", "sqlalchemy"] },
+    { name = "craftainer-observability", extra = ["http", "otel", "profiling", "redis", "s3", "sqlalchemy"] },
     { name = "httpx2" },
     { name = "import-linter" },
     { name = "mypy" },
@@ -451,7 +451,7 @@ provides-extras = ["otel", "sqlalchemy", "redis", "s3", "http", "profiling"]
 [package.metadata.requires-dev]
 dev = [
     { name = "boto3-stubs", extras = ["s3"], specifier = "==1.43.98" },
-    { name = "craftainer-tool-observability", extras = ["otel", "sqlalchemy", "redis", "s3", "http", "profiling"] },
+    { name = "craftainer-observability", extras = ["otel", "sqlalchemy", "redis", "s3", "http", "profiling"] },
     { name = "httpx2", specifier = "==2.13.0" },
     { name = "import-linter", specifier = "==2.15" },
     { name = "mypy", specifier = "==2.3.1" },

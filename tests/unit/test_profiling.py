@@ -4,7 +4,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from craftainer_tool_observability.profiling import (
+from craftainer_observability.profiling import (
     ProfilingDisabledError,
     ProfilingMiddleware,
     install_profiling,
