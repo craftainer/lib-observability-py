@@ -33,6 +33,10 @@ from craftainer_observability.health.redact import redact
         ("password=a;b,c)d&e done", "password=[REDACTED] done"),
         (r"token='it\'s secret' x", "token=[REDACTED] x"),
         ("password='oops", "password=[REDACTED]"),
+        (
+            '{"password": "x", "private_key": "k"}',
+            '{"password": [REDACTED], "private_key": [REDACTED]}',
+        ),
     ],
 )
 def test_credentials_are_redacted(text: str, expected: str) -> None:

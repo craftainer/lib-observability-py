@@ -5,7 +5,7 @@ import logging
 
 import pytest
 
-from craftainer_observability.health.base import HealthCheckResult
+from craftainer_observability.health.base import UNHEALTHY_DETAIL, HealthCheckResult
 from craftainer_observability.health.registry import (
     DEFAULT_CHECK_TIMEOUT,
     TIMEOUT_DETAIL,
@@ -97,3 +97,46 @@ async def test_a_per_check_timeout_overrides_the_registry_default() -> None:
     assert await registry.run_all() == [
         HealthCheckResult("slow", healthy=False, detail=TIMEOUT_DETAIL)
     ]
+
+
+class _RaisingCheck:
+    """A HealthCheck whose check() raises instead of reporting."""
+
+    name = "boom"
+
+    async def check(self) -> HealthCheckResult:
+        """Raise an OSError carrying a credential."""
+        msg = "cannot connect to postgres://u:hunter2@db/x"
+        raise OSError(msg)
+
+
+class _OwnTimeoutCheck(_HangingCheck):
+    """A hanging check that declares its own, longer timeout."""
+
+    timeout = 0.2
+
+
+async def test_a_raising_check_is_unhealthy_and_does_not_break_the_others(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An exception in one check yields an unhealthy result; the rest still answer, redacted log."""
+    registry = HealthRegistry()
+    registry.register(_RaisingCheck())
+    registry.register(_FakeCheck("ok", healthy=True))
+    with caplog.at_level(logging.ERROR):
+        results = await registry.run_all()
+    assert [(r.name, r.healthy) for r in results] == [("boom", False), ("ok", True)]
+    assert results[0].detail == UNHEALTHY_DETAIL
+    assert "hunter2" not in caplog.text
+    assert "[REDACTED]" in caplog.text
+
+
+async def test_a_check_own_timeout_beats_the_registry_default() -> None:
+    """A check's public `timeout` attribute is used instead of the registry default."""
+    registry = HealthRegistry(default_timeout=0.01)
+    own = _OwnTimeoutCheck("own")
+    registry.register(own)
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    await registry.run_all()
+    assert loop.time() - start >= 0.15

@@ -7,7 +7,9 @@ text before it is logged. A safety net, not a parser: it over-redacts rather tha
 Same patterns as `lib-observability-rs`.
 """
 
+import logging
 import re
+import traceback
 
 REDACTED = "[REDACTED]"
 
@@ -21,8 +23,8 @@ _USERINFO = re.compile(r"""(://)[^\s"']*@""")
 # The value is a quoted string (backslash escapes honoured; unterminated runs to the end)
 # or a run up to whitespace or a quote.
 _PAIR = re.compile(
-    r"""(?P<key>secret_key|secret|password|passwd|pwd|token|api_key|apikey|access_key)"""
-    r"""(?P<sep> *[=:] *)"""
+    r"""(?P<key>secret_key|secret|password|passwd|pwd|token|api_key|apikey|access_key|private_key|authorization)"""
+    r"""(?P<sep>["']? *[=:] *)"""
     r"""(?:'(?:\\.|[^'\\])*(?:'|$)|"(?:\\.|[^"\\])*(?:"|$)|[^\s'"]*)""",
     re.IGNORECASE | re.DOTALL,
 )
@@ -32,3 +34,14 @@ def redact(text: str) -> str:
     """`text` with URL userinfo and secret key/value pairs replaced by `[REDACTED]`."""
     text = _USERINFO.sub(rf"\1{REDACTED}@", text)
     return _PAIR.sub(rf"\g<key>\g<sep>{REDACTED}", text)
+
+
+def log_failure(logger: logging.Logger, message: str, exc: BaseException) -> None:
+    """Log `message` and `exc` with its traceback, credentials redacted.
+
+    Unlike `logger.exception` (whose `exc_info` would carry the raw text), the type goes in
+    `exception_type` and the traceback text (which carries the exception message,
+    and so any DSN in it) goes through `redact` before it is logged.
+    """
+    trace = "".join(traceback.format_exception(exc))
+    logger.error("%s\n%s", message, redact(trace), extra={"exception_type": type(exc).__qualname__})

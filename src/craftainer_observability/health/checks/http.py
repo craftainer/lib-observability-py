@@ -20,12 +20,12 @@ class HTTPCheck:
         """Bind this check to the full URL to GET, reporting under `name`."""
         self.name = name
         self._url = url
-        self._timeout = timeout
+        self.timeout = timeout
 
     async def check(self) -> HealthCheckResult:
         """GET the URL and report whether it succeeded."""
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.get(self._url)
                 response.raise_for_status()
         except httpx.HTTPError as exc:
