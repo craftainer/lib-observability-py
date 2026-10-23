@@ -32,6 +32,7 @@ from craftainer_observability.health.redact import redact
         ("api_key=abc apikey:def", "api_key=[REDACTED] apikey:[REDACTED]"),
         ("password=a;b,c)d&e done", "password=[REDACTED] done"),
         (r"token='it\'s secret' x", "token=[REDACTED] x"),
+        ("Authorization: Bearer eyJabc.def x", "Authorization: [REDACTED] x"),
         ("password='oops", "password=[REDACTED]"),
         (
             '{"password": "x", "private_key": "k"}',

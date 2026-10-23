@@ -7,8 +7,8 @@ import logging
 
 import httpx
 
-from craftainer_observability.health.base import HealthCheckResult
-from craftainer_observability.health.checks._common import UNHEALTHY_DETAIL, log_failure
+from craftainer_observability.health.base import UNHEALTHY_DETAIL, HealthCheckResult
+from craftainer_observability.health.redact import log_failure
 
 logger = logging.getLogger(__name__)
 

@@ -25,6 +25,7 @@ _USERINFO = re.compile(r"""(://)[^\s"']*@""")
 _PAIR = re.compile(
     r"""(?P<key>secret_key|secret|password|passwd|pwd|token|api_key|apikey|access_key|private_key|authorization)"""
     r"""(?P<sep>["']? *[=:] *)"""
+    r"""(?:(?:bearer|basic) +)?"""
     r"""(?:'(?:\\.|[^'\\])*(?:'|$)|"(?:\\.|[^"\\])*(?:"|$)|[^\s'"]*)""",
     re.IGNORECASE | re.DOTALL,
 )

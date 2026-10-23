@@ -132,11 +132,18 @@ async def test_a_raising_check_is_unhealthy_and_does_not_break_the_others(
 
 
 async def test_a_check_own_timeout_beats_the_registry_default() -> None:
-    """A check's public `timeout` attribute is used instead of the registry default."""
-    registry = HealthRegistry(default_timeout=0.01)
-    own = _OwnTimeoutCheck("own")
-    registry.register(own)
-    loop = asyncio.get_running_loop()
-    start = loop.time()
-    await registry.run_all()
-    assert loop.time() - start >= 0.15
+    """A check's public `timeout` is used instead of the registry default."""
+    registry = HealthRegistry(default_timeout=3600)
+    registry.register(_OwnTimeoutCheck("own"))
+    assert await registry.run_all() == [
+        HealthCheckResult("own", healthy=False, detail=TIMEOUT_DETAIL)
+    ]
+
+
+async def test_a_bad_timeout_value_is_an_unhealthy_check_not_a_crash() -> None:
+    """A non-numeric limit makes that check unhealthy; run_all still returns."""
+    registry = HealthRegistry()
+    registry.register(_FakeCheck("a", healthy=True), timeout="x")  # type: ignore[arg-type]
+    registry.register(_FakeCheck("b", healthy=True))
+    results = await registry.run_all()
+    assert [(r.name, r.healthy) for r in results] == [("a", False), ("b", True)]

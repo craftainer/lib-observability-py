@@ -41,7 +41,12 @@ class HealthRegistry:
         own: float | None = getattr(check, "timeout", None)
         limit = next(t for t in (timeout, own, self._default_timeout) if t is not None)
         try:
-            async with asyncio.timeout(limit) as scope:
+            scope = asyncio.timeout(limit)
+        except TypeError as exc:  # a non-numeric limit
+            log_failure(logger, "Health check has an invalid timeout", exc)
+            return HealthCheckResult(check.name, healthy=False, detail=UNHEALTHY_DETAIL)
+        try:
+            async with scope:
                 return await check.check()
         except Exception as exc:
             if scope.expired():
