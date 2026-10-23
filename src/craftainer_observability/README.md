@@ -26,7 +26,18 @@ manual/pre-push stage, same as mypy).
   `HealthCheckResult` itself.
 - `registry.py` — `HealthRegistry` (`register`/`run_all`, the latter
   running every check concurrently via `asyncio.gather`); a bare
-  collector with no knowledge of what it's collecting.
+  collector with no knowledge of what it's collecting. Every check runs
+  under a timeout (5 seconds, `DEFAULT_CHECK_TIMEOUT`; `HealthRegistry(default_timeout=...)`
+  for all, `register(check, timeout=...)` for one): a check that exceeds it is
+  reported unhealthy with the detail `health check timed out` (the real timeout is
+  logged), so one hung dependency cannot stall `/ready`. `register` raises
+  `ValueError` for a name that is already registered, because `/ready` keys its
+  response by name and a duplicate would hide a failing check.
+- `redact.py` — `redact(text)`, which replaces URL userinfo
+  (`scheme://user:pass@host`) and `password`/`passwd`/`pwd`/`token`/`secret`/
+  `secret_key`/`api_key`/`apikey`/`access_key` `key=value` or `key: value` pairs with
+  `[REDACTED]`. A safety net that over-redacts rather than leak; the same patterns as
+  `lib-observability-rs`. Not a layer of the graph below: the checks use it.
 - `router.py` — `build_health_router(get_registry)`, a factory that
   builds the `/live`/`/ready` router against whatever
   `Callable[..., HealthRegistry]` the caller passes in as a FastAPI
@@ -51,14 +62,15 @@ library only inside its own module. A check's `name` defaults to the service
 | Check | Module | Extra | Constructor |
 | --- | --- | --- | --- |
 | `PostgresCheck` | `checks/postgres.py` | `[sqlalchemy]` | `PostgresCheck(engine)`, an `AsyncEngine`; runs `SELECT 1` |
-| `RedisCheck` | `checks/redis.py` | `[redis]` | `RedisCheck(url)`; PINGs |
+| `RedisCheck` | `checks/redis.py` | `[redis]` | `RedisCheck(url)`; PINGs over one client reused by every check (per event loop; `await check.aclose()` on shutdown) |
 | `S3Check` | `checks/s3.py` | `[s3]` | `S3Check(client)`, a boto3 S3 client; calls `ListBuckets` in a thread |
 | `HTTPCheck` | `checks/http.py` | `[http]` | `HTTPCheck(url, timeout=5)`; GETs the full URL (e.g. an OIDC discovery document) |
 
 Each catches its own client library's errors, logs them, and returns an
 unhealthy `HealthCheckResult` carrying only a fixed detail string (the real
 exception text can embed credentials, so it goes to the logs only; `/ready` is
-unauthenticated).
+unauthenticated). The logged error and traceback pass through `redact` first, so a
+DSN's userinfo or a `password=...` pair does not reach the logs either.
 
 ## logs
 
@@ -67,7 +79,10 @@ root logger (with credential-shaped `extra=` keys redacted) and, when
 `OTEL_EXPORTER_OTLP_ENDPOINT` is set, bridges the root logger to an OTLP log
 exporter. The OTel `service.name` comes from OTel's standard `OTEL_SERVICE_NAME`
 env var (`Resource.create()` reads it itself); the module imports neither `app`
-nor its settings.
+nor its settings. `configure_logging()` is idempotent: a second call replaces the
+handlers the first installed (handlers the host added are left alone) instead of
+stacking a duplicate set, and the OTLP log provider is created once per process, so the
+first call that enables export fixes its exporter settings.
 
 ## Telemetry
 

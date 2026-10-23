@@ -68,6 +68,36 @@ def test_configure_logging_attaches_json_handler_to_root(_clean_root_handlers: N
     assert any(isinstance(h.formatter, _JSONFormatter) for h in root.handlers)
 
 
+def test_configure_logging_is_idempotent(_clean_root_handlers: None) -> None:
+    """Calling configure_logging() twice leaves one JSON handler, not two."""
+    configure_logging()
+    configure_logging()
+    root = logging.getLogger()
+    assert sum(isinstance(h.formatter, _JSONFormatter) for h in root.handlers) == 1
+
+
+def test_configure_logging_keeps_foreign_handlers(_clean_root_handlers: None) -> None:
+    """A handler the host added itself survives a configure_logging() call."""
+    foreign = logging.NullHandler()
+    logging.getLogger().addHandler(foreign)
+    configure_logging()
+    configure_logging()
+    assert foreign in logging.getLogger().handlers
+
+
+def test_configure_logging_does_not_stack_otel_handlers(
+    _clean_root_handlers: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With OTLP on, a re-call keeps one OTEL handler and reuses the provider."""
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
+    configure_logging()
+    first = [h for h in logging.getLogger().handlers if isinstance(h, LoggingHandler)]
+    configure_logging()
+    second = [h for h in logging.getLogger().handlers if isinstance(h, LoggingHandler)]
+    assert len(first) == len(second) == 1
+    assert first[0]._logger_provider is second[0]._logger_provider
+
+
 def test_configure_logging_adds_otel_handler_when_endpoint_set(
     _clean_root_handlers: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:

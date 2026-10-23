@@ -8,7 +8,7 @@ import logging
 import httpx
 
 from craftainer_observability.health.base import HealthCheckResult
-from craftainer_observability.health.checks._common import UNHEALTHY_DETAIL
+from craftainer_observability.health.checks._common import UNHEALTHY_DETAIL, log_failure
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ class HTTPCheck:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 response = await client.get(self._url)
                 response.raise_for_status()
-        except httpx.HTTPError:
-            logger.exception("HTTP health check failed")
+        except httpx.HTTPError as exc:
+            log_failure(logger, "HTTP health check failed", exc)
             return HealthCheckResult(self.name, healthy=False, detail=UNHEALTHY_DETAIL)
         return HealthCheckResult(self.name, healthy=True)
