@@ -1,5 +1,6 @@
 """Unit test: each generic dependency check's success/failure paths, services faked out."""
 
+import logging
 from collections.abc import Callable
 from typing import Any, cast
 
@@ -96,6 +97,45 @@ async def test_redis_check_reports_unhealthy_on_failure(monkeypatch: pytest.Monk
     assert result.detail is not None
 
 
+async def test_redis_check_reuses_one_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """RedisCheck builds its client once and keeps it until aclose()."""
+    created: list[_FakeRedisClient] = []
+
+    def from_url(_url: str) -> _FakeRedisClient:
+        created.append(_FakeRedisClient(fail=False))
+        return created[-1]
+
+    monkeypatch.setattr(Redis, "from_url", from_url)
+    check = RedisCheck("redis://example")
+    await check.check()
+    await check.check()
+    assert len(created) == 1
+    await check.aclose()
+    await check.aclose()
+    await check.check()
+    assert len(created) == 2
+
+
+async def test_failed_checks_log_without_credentials(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The logged error and traceback have URL userinfo and password pairs redacted."""
+
+    class _Leaky(_FakeRedisClient):
+        async def ping(self) -> bool:
+            msg = "cannot reach redis://:hunter2@cache:6379/0 password=hunter3"
+            raise RedisError(msg)
+
+    monkeypatch.setattr(Redis, "from_url", lambda _url: _Leaky(fail=True))
+    with caplog.at_level(logging.ERROR):
+        result = await RedisCheck("redis://:hunter2@cache").check()
+    assert result.healthy is False
+    assert "Redis health check failed" in caplog.text
+    assert "redis://[REDACTED]@cache:6379/0" in caplog.text
+    assert "password=[REDACTED]" in caplog.text
+    assert "hunter" not in caplog.text
+
+
 class _FakeS3Client:
     """Stand-in for a boto3 S3 client, with a scripted list_buckets outcome."""
 
@@ -178,3 +218,29 @@ async def test_check_names_default_and_override() -> None:
     assert S3Check(cast("Any", _FakeS3Client(fail=False))).name == "s3"
     assert HTTPCheck("http://x").name == "http"
     assert HTTPCheck("http://x", name="oidc").name == "oidc"
+
+
+async def test_failed_checks_all_log_redacted(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Postgres, S3 and HTTP failures also log through the redacting helper."""
+
+    class _Engine:
+        def connect(self) -> _FakeConnection:
+            msg = "bad postgres://u:hunter2@db/x"
+            raise SQLAlchemyError(msg)
+
+    class _S3:
+        def list_buckets(self) -> None:
+            raise ClientError({"Error": {"Code": "1", "Message": "password=hunter2"}}, "L")
+
+    with caplog.at_level(logging.ERROR):
+        await PostgresCheck(cast("Any", _Engine())).check()
+        await S3Check(cast("Any", _S3())).check()
+    assert "hunter" not in caplog.text
+    assert caplog.text.count("[REDACTED]") >= 2
+
+
+def test_http_check_exposes_its_timeout() -> None:
+    """HTTPCheck.timeout is public so the registry honours it instead of its default."""
+    assert HTTPCheck("http://x", timeout=12).timeout == 12

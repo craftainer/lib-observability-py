@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING
 
 from botocore.exceptions import BotoCoreError, ClientError
 
-from craftainer_observability.health.base import HealthCheckResult
-from craftainer_observability.health.checks._common import UNHEALTHY_DETAIL
+from craftainer_observability.health.base import UNHEALTHY_DETAIL, HealthCheckResult
+from craftainer_observability.health.redact import log_failure
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ class S3Check:
         """Call ListBuckets in a thread and report whether it succeeded."""
         try:
             await asyncio.to_thread(self._client.list_buckets)
-        except BotoCoreError, ClientError:
-            logger.exception("S3 health check failed")
+        except (BotoCoreError, ClientError) as exc:
+            log_failure(logger, "S3 health check failed", exc)
             return HealthCheckResult(self.name, healthy=False, detail=UNHEALTHY_DETAIL)
         return HealthCheckResult(self.name, healthy=True)

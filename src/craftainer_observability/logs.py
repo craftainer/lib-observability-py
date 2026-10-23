@@ -116,12 +116,34 @@ class _JSONFormatter(logging.Formatter):
         return json.dumps(payload, default=str)
 
 
+_OWNED = "_craftainer_observability"
+"""Attribute set on the handlers `configure_logging` installs, to find them on a re-call."""
+
+_providers: dict[str, LoggerProvider] = {}
+"""The process-wide OTLP log provider, under `"logs"` once created."""
+
+
+def _drop_owned_handlers(root: logging.Logger) -> None:
+    """Remove the handlers an earlier `configure_logging` call put on `root`."""
+    for handler in list(root.handlers):
+        if getattr(handler, _OWNED, False):
+            root.removeHandler(handler)
+
+
 def configure_logging() -> None:
-    """Attach a JSON stdout handler to the root logger, plus OTLP export if configured."""
+    """Attach a JSON stdout handler to the root logger, plus OTLP export if configured.
+
+    Idempotent: a second call replaces the handlers the first installed instead of
+    stacking another set (which would print every line twice). The OTLP log provider is
+    created once per process and reused, so the exporter settings of the first call that
+    enables export win.
+    """
     root = logging.getLogger()
+    _drop_owned_handlers(root)
     root.setLevel(logging.INFO)
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(_JSONFormatter())
+    setattr(handler, _OWNED, True)
     root.addHandler(handler)
     # uvicorn configures its own plain-text handlers (propagate=False) before importing
     # the app; hand its loggers over to the root handlers so they are JSON too.
@@ -144,7 +166,12 @@ def configure_logging() -> None:
 
 def _configure_otel_logging(root: logging.Logger) -> None:
     """Bridge the root logger to an OTLP log exporter."""
-    provider = LoggerProvider(resource=shared_resource())
-    provider.add_log_record_processor(BatchLogRecordProcessor(OTLPLogExporter()))
-    set_logger_provider(provider)
-    root.addHandler(LoggingHandler(logger_provider=provider))
+    provider = _providers.get("logs")
+    if provider is None:
+        provider = LoggerProvider(resource=shared_resource())
+        provider.add_log_record_processor(BatchLogRecordProcessor(OTLPLogExporter()))
+        set_logger_provider(provider)
+        _providers["logs"] = provider
+    otel_handler = LoggingHandler(logger_provider=provider)
+    setattr(otel_handler, _OWNED, True)
+    root.addHandler(otel_handler)

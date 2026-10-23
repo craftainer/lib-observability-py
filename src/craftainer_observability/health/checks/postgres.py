@@ -9,8 +9,8 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from craftainer_observability.health.base import HealthCheckResult
-from craftainer_observability.health.checks._common import UNHEALTHY_DETAIL
+from craftainer_observability.health.base import UNHEALTHY_DETAIL, HealthCheckResult
+from craftainer_observability.health.redact import log_failure
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ class PostgresCheck:
         try:
             async with self._engine.connect() as conn:
                 await conn.execute(text("SELECT 1"))
-        except SQLAlchemyError:
-            logger.exception("Database health check failed")
+        except SQLAlchemyError as exc:
+            log_failure(logger, "Database health check failed", exc)
             return HealthCheckResult(self.name, healthy=False, detail=UNHEALTHY_DETAIL)
         return HealthCheckResult(self.name, healthy=True)
