@@ -24,10 +24,10 @@ otel = [
     "opentelemetry-instrumentation-logging>=0.65b0,<1",
     "opentelemetry-instrumentation-fastapi>=0.65b0,<1",
     "opentelemetry-instrumentation-sqlalchemy>=0.65b0,<1",
-    "sqlalchemy[asyncio]>=2.0.54,<2.1",
+    "sqlalchemy[asyncio]>=2.1.6,<2.2",
 ]
 # Upper bound: opentelemetry-instrumentation-sqlalchemy supports < 2.1 only.
-sqlalchemy = ["sqlalchemy[asyncio]>=2.0.54,<2.1"]
+sqlalchemy = ["sqlalchemy[asyncio]>=2.1.6,<2.2"]
 redis = ["redis>=8.1.0,<9"]
 s3 = ["boto3>=1.43.98,<2"]
 http = ["httpx>=0.28.1,<1"]
@@ -36,8 +36,8 @@ profiling = ["pyinstrument>=5.1.3,<6"]
 [dependency-groups]
 # Installed by a plain `uv sync` (uv's default group).
 dev = [
-    "ruff==0.16.8",
-    "mypy==2.3.1",
+    "ruff==0.17.2",
+    "mypy==2.4.0",
     "pytest==9.1.1",
     "pytest-asyncio==1.4.0",
     "pytest-cov==7.1.0",
@@ -45,9 +45,9 @@ dev = [
     "pytest-codspeed==5.0.3",
     "import-linter==2.15",
     "pip-audit==2.10.1",
-    "boto3-stubs[s3]==1.43.98",
+    "boto3-stubs[s3]==1.43.118",
     # starlette.testclient (used by the tests) wants httpx2.
-    "httpx2==2.13.0",
+    "httpx2==2.16.0",
     # The unit tests exercise every extra.
     "craftainer-observability[otel,sqlalchemy,redis,s3,http,profiling]",
 ]
