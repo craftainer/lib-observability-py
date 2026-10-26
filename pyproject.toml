@@ -6,7 +6,7 @@ name = "craftainer-observability"
 # real version, stamped into the build at release time without a commit.
 version = "0.0.0"
 description = "Health checks, structured logging, OpenTelemetry, request IDs and profiling for FastAPI services"
-license = "GPL-3.0-or-later"
+license = "GPL-3.0-only"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
