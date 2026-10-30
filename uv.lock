@@ -391,6 +391,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+analytics = [
+    { name = "httpx" },
+]
 http = [
     { name = "httpx" },
 ]
@@ -418,7 +421,7 @@ sqlalchemy = [
 [package.dev-dependencies]
 dev = [
     { name = "boto3-stubs", extra = ["s3"] },
-    { name = "craftainer-observability", extra = ["http", "otel", "profiling", "redis", "s3", "sqlalchemy"] },
+    { name = "craftainer-observability", extra = ["analytics", "http", "otel", "profiling", "redis", "s3", "sqlalchemy"] },
     { name = "httpx2" },
     { name = "import-linter" },
     { name = "mypy" },
@@ -435,6 +438,7 @@ dev = [
 requires-dist = [
     { name = "boto3", marker = "extra == 's3'", specifier = ">=1.43.98,<2" },
     { name = "fastapi", specifier = ">=0.141.1,<1" },
+    { name = "httpx", marker = "extra == 'analytics'", specifier = ">=0.28.1,<1" },
     { name = "httpx", marker = "extra == 'http'", specifier = ">=0.28.1,<1" },
     { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'otel'", specifier = ">=1.44.0,<2" },
     { name = "opentelemetry-instrumentation-fastapi", marker = "extra == 'otel'", specifier = ">=0.65b0,<1" },
@@ -446,12 +450,12 @@ requires-dist = [
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'otel'", specifier = ">=2.0.54,<2.1" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'sqlalchemy'", specifier = ">=2.0.54,<2.1" },
 ]
-provides-extras = ["otel", "sqlalchemy", "redis", "s3", "http", "profiling"]
+provides-extras = ["otel", "sqlalchemy", "redis", "s3", "http", "profiling", "analytics"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "boto3-stubs", extras = ["s3"], specifier = "==1.43.98" },
-    { name = "craftainer-observability", extras = ["otel", "sqlalchemy", "redis", "s3", "http", "profiling"] },
+    { name = "craftainer-observability", extras = ["otel", "sqlalchemy", "redis", "s3", "http", "profiling", "analytics"] },
     { name = "httpx2", specifier = "==2.13.0" },
     { name = "import-linter", specifier = "==2.15" },
     { name = "mypy", specifier = "==2.3.1" },
