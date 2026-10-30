@@ -44,7 +44,10 @@ class NoneAdapter:
 
 
 class LogAdapter:
-    """Writes one structured log line per event (`extra=` fields, JSON under `logs.py`)."""
+    """One structured log line per event, as flat `extra=` fields.
+
+    Fields are `analytics_event`, `analytics_url` and `analytics_prop_<key>`.
+    """
 
     def __init__(self, logger_name: str = "craftainer_observability.analytics.events") -> None:
         """Log through `logger_name`."""
@@ -53,14 +56,10 @@ class LogAdapter:
     def send(self, events: list[Event]) -> None:
         """Log each event at INFO."""
         for event in events:
-            self._logger.info(
-                "analytics_event",
-                extra={
-                    "analytics_event": event.name,
-                    "analytics_props": event.props,
-                    "analytics_url": event.url,
-                },
-            )
+            extra: dict[str, Any] = {"analytics_event": event.name, "analytics_url": event.url}
+            for key, value in event.props.items():
+                extra[f"analytics_prop_{key}"] = value
+            self._logger.info("analytics_event", extra=extra)
 
 
 class OtelAdapter(LogAdapter):
@@ -115,6 +114,14 @@ class UmamiAdapter:
         for start in range(0, len(events), BATCH_SIZE):
             chunk = events[start : start + BATCH_SIZE]
             response = self._http.post(self._url, json=[self._item(e) for e in chunk])
+            if response.is_redirect:
+                logger.warning(
+                    "umami batch dropped: HTTP %s redirect to %r; ANALYTICS_ENDPOINT must be "
+                    "the final URL",
+                    response.status_code,
+                    response.headers.get("location", ""),
+                )
+                continue
             if response.status_code != httpx.codes.OK:
                 logger.warning("umami batch rejected: HTTP %s", response.status_code)
                 continue

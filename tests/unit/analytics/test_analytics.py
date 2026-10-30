@@ -3,6 +3,7 @@
 import atexit
 import json
 import logging
+import os
 import time
 from collections.abc import Iterator
 from typing import Any
@@ -311,7 +312,8 @@ def test_log_and_otel_adapters(
         c.track("a.b", {"k": 1}, url="/x?y")
     (rec,) = [r for r in caplog.records if r.name == logger_name]
     assert rec.analytics_event == "a.b"  # type: ignore[attr-defined]
-    assert rec.analytics_props == {"k": 1}  # type: ignore[attr-defined]
+    assert rec.analytics_prop_k == 1  # type: ignore[attr-defined]
+    assert not hasattr(rec, "analytics_props")
     assert rec.analytics_url == "/x"  # type: ignore[attr-defined]
     c.shutdown()
 
@@ -454,3 +456,104 @@ def test_track_after_stop_starts_no_thread_and_atexit_registers_once(
     c.shutdown()
     c.track("a.b")
     assert c._thread is None
+
+
+def test_log_adapter_attributes_survive_json_formatter() -> None:
+    """The flat extra keys reach the JSON line `configure_logging()` renders."""
+    from craftainer_observability.logs import _JSONFormatter  # noqa: PLC0415
+
+    seen: list[str] = []
+
+    class Grab(logging.Handler):
+        """Grab."""
+
+        def emit(self, record: logging.LogRecord) -> None:
+            """Emit."""
+            seen.append(_JSONFormatter().format(record))
+
+    lg = logging.getLogger("craftainer_observability.analytics.events")
+    h = Grab()
+    lg.addHandler(h)
+    lg.setLevel(logging.INFO)
+    try:
+        c = analytics.AnalyticsClient(AnalyticsConfig(backend="log", prop_keys=frozenset({"k"})))
+        c.track("a.b", {"k": 1}, url="/x")
+    finally:
+        lg.removeHandler(h)
+        lg.setLevel(logging.NOTSET)
+    payload = json.loads(seen[0])
+    assert payload["analytics_event"] == "a.b"
+    assert payload["analytics_url"] == "/x"
+    assert payload["analytics_prop_k"] == 1
+
+
+def test_redirect_dropped_with_location_warning(caplog: pytest.LogCaptureFixture) -> None:
+    """A 3xx is not followed; one warning names status and Location, never the payload."""
+    seen: list[str] = []
+
+    def redirect(request: httpx.Request) -> httpx.Response:
+        """Redirect."""
+        seen.append(str(request.url))
+        return httpx.Response(301, headers={"location": "https://u/api/batch"})
+
+    c = analytics.AnalyticsClient(
+        AnalyticsConfig(backend="umami", endpoint="http://u", site_id="s"),
+        transport=httpx.MockTransport(redirect),
+        flush_interval=3600,
+    )
+    c.track("a.b")
+    with caplog.at_level(logging.WARNING):
+        c.flush()
+    assert seen == ["http://u/api/batch"]
+    assert "HTTP 301" in caplog.text
+    assert "https://u/api/batch" in caplog.text
+    assert "a.b" not in caplog.text
+    c.shutdown()
+
+
+def test_fork_child_restarts_flusher(monkeypatch: pytest.MonkeyPatch) -> None:
+    """After a real fork the child gets a fresh queue and starts its own flusher."""
+    rec = Recorder()
+    c = umami(rec)
+    c._flush_interval = 0.05
+    monkeypatch.setattr(client_mod, "_client", c)
+    c.track("parent.evt")
+    assert c._thread is not None
+    r, w = os.pipe()
+    pid = os.fork()
+    if pid == 0:  # pragma: no cover - runs in the child process
+        code = 1
+        try:
+            ok = getattr(c, "_thread", 1) is None and c._queue.empty()
+            c.track("child.evt")
+            deadline = time.time() + 3
+            while time.time() < deadline and not rec.requests:
+                time.sleep(0.02)
+            names = [i["payload"]["name"] for i in rec.items()]
+            code = 0 if ok and "child.evt" in names else 2
+        finally:
+            os.write(w, bytes([code]))
+            os._exit(code)
+    os.close(w)
+    result = os.read(r, 1)
+    os.close(r)
+    os.waitpid(pid, 0)
+    assert result == bytes([0])
+    c.shutdown()
+
+
+def test_reset_after_fork_hook_resets_client_and_tolerates_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The registered hook resets the global client's state, and is safe with none."""
+    c = umami(Recorder())
+    monkeypatch.setattr(client_mod, "_client", c)
+    c.track("a.b")
+    old_lock = c._drain_lock
+    client_mod._reset_after_fork()
+    assert c._queue.empty()
+    assert c._drain_lock is not old_lock
+    assert getattr(c, "_thread", 1) is None
+    monkeypatch.setattr(client_mod, "_client", None)
+    client_mod._reset_after_fork()
+    c.shutdown()

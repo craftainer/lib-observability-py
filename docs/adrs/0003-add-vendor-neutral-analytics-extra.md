@@ -49,6 +49,13 @@ library that already owns logging and OpenTelemetry. Constraints:
 - `ANALYTICS_GEO` is parsed for contract parity but has no effect: backend events carry
   `ip=server`, so Umami derives no location from them.
 
+- `ANALYTICS_ENDPOINT` must be the final URL: redirects are not followed, and a 3xx
+  batch is dropped with one warning naming the status and `Location` (never the payload).
+- `log`/`otel` events are flat log attributes (`analytics_event`, `analytics_url`,
+  `analytics_prop_<key>`), because OTel log attributes must be primitives.
+- After `fork()` the child resets the client's queue, locks and thread handle
+  (`os.register_at_fork`) and starts its own flusher on the first `track()`.
+
 ## Consequences
 
 - Services get one call that is safe in request handlers and works from sync and async

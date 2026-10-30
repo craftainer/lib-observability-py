@@ -11,6 +11,7 @@ Needs the `[analytics]` extra (`httpx`). Never raises and never blocks the calle
 
 ## Do
 
+- Set `ANALYTICS_ENDPOINT` to the final URL: redirects are not followed (a 3xx batch is dropped with a warning naming the `Location`).
 - Wrap each request in `request_context(...)` from the framework's middleware.
 - Add a prop key to `ANALYTICS_PROP_KEYS` before sending it.
 

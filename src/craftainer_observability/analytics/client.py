@@ -2,6 +2,7 @@
 
 import atexit
 import logging
+import os
 import queue
 import threading
 import time
@@ -54,6 +55,14 @@ class AnalyticsClient:
         self._start_lock = threading.Lock()
         self._adapter = self._build_adapter(transport)
         self._queued = isinstance(self._adapter, UmamiAdapter)
+
+    def _reset_after_fork(self) -> None:
+        """Drop state inherited from the parent: its flusher thread does not exist here."""
+        self._queue = queue.Queue(QUEUE_CAPACITY)
+        self._drain_lock = threading.Lock()
+        self._start_lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread = None
 
     def _build_adapter(self, transport: httpx.BaseTransport | None) -> Adapter:
         cfg = self.config
@@ -173,6 +182,17 @@ def get_client() -> AnalyticsClient:
                 atexit.register(shutdown)
                 _atexit_registered = True
         return _client
+
+
+def _reset_after_fork() -> None:
+    """Child side of `fork()`: fresh locks and queue; the flusher restarts on the next `track()`."""
+    global _client_lock  # noqa: PLW0603
+    _client_lock = threading.Lock()
+    if _client is not None:
+        _client._reset_after_fork()
+
+
+os.register_at_fork(after_in_child=_reset_after_fork)
 
 
 def track(name: str, props: Mapping[str, Any] | None = None, *, url: str | None = None) -> None:
