@@ -40,6 +40,7 @@ pip install "craftainer-observability[otel,redis]"      # plus tracing/metrics/l
 | `s3` | boto3 | `health.checks.s3.S3Check` |
 | `http` | httpx | `health.checks.http.HTTPCheck` |
 | `profiling` | pyinstrument | `profiling.install_profiling` |
+| `analytics` | httpx | `analytics.track` |
 
 `logs.py` and `otel.py` import OpenTelemetry at module level, so import them
 only when `[otel]` is installed. The package root, `health` and `middleware`
@@ -57,6 +58,7 @@ hence the `<2.1` bound.
 | `otel` | `configure_telemetry()`, `instrument_app(app)`, `instrument_engine(engine)` |
 | `middleware` | `RequestIDMiddleware`, `get_request_id()` |
 | `profiling` | `install_profiling(app, *, enabled, production, query_param="profile")` |
+| `analytics` | `track(name, props=None, *, url=None)`, `request_context(*, gpc, consent)`, `shutdown()` (needs `[analytics]`; see [ADR 0003](docs/adrs/0003-add-vendor-neutral-analytics-extra.md) and `src/craftainer_observability/analytics/README.md`) |
 
 The details, environment variables and conventions are in
 [`src/craftainer_observability/README.md`](src/craftainer_observability/README.md).
