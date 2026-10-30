@@ -50,7 +50,10 @@ def clean_url(url: str | None) -> str:
     """The path of `url` with query and fragment stripped; `/` when empty or not a string."""
     if not isinstance(url, str) or not url:
         return "/"
-    path = urlsplit(url).path or "/"
+    try:
+        path = urlsplit(url).path or "/"
+    except ValueError:
+        return "/"
     if not path.startswith("/"):
         path = "/" + path
     return path[:MAX_URL]

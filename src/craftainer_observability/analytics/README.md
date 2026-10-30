@@ -16,4 +16,4 @@ Needs the `[analytics]` extra (`httpx`). Never raises and never blocks the calle
 
 ## Don't
 
-- Import a web framework here, or log a prop value.
+- Import a web framework here, or log the value of a dropped or invalid prop (the `log`/`otel` adapters do log allowlisted values by design).

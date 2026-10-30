@@ -118,7 +118,12 @@ class UmamiAdapter:
             if response.status_code != httpx.codes.OK:
                 logger.warning("umami batch rejected: HTTP %s", response.status_code)
                 continue
-            errors = response.json().get("errors", 0)
+            try:
+                body = response.json()
+                errors = body.get("errors", 0) if isinstance(body, dict) else 0
+            except ValueError:
+                logger.warning("umami batch reply was not JSON")
+                continue
             if errors:
                 logger.warning("umami batch reported %s errors of %s", errors, len(chunk))
 

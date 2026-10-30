@@ -117,6 +117,8 @@ class AnalyticsClient:
         self._ensure_thread()
 
     def _ensure_thread(self) -> None:
+        if self._thread is not None:
+            return
         with self._start_lock:
             if self._thread is None and not self._stop.is_set():
                 self._thread = threading.Thread(
@@ -143,6 +145,7 @@ class AnalyticsClient:
                     self._adapter.send(events[start : start + BATCH_SIZE])
                 except Exception as exc:
                     logger.debug("analytics delivery failed: %s", type(exc).__name__)
+                    break  # backend unreachable: drop the rest rather than wait out every timeout
 
     def shutdown(self) -> None:
         """Stop the flush thread after a final flush and close the HTTP client."""
@@ -157,15 +160,18 @@ class AnalyticsClient:
 
 _client: AnalyticsClient | None = None
 _client_lock = threading.Lock()
+_atexit_registered = False
 
 
 def get_client() -> AnalyticsClient:
     """The process-wide client, built from the environment on first use."""
-    global _client  # noqa: PLW0603
+    global _client, _atexit_registered  # noqa: PLW0603
     with _client_lock:
         if _client is None:
             _client = AnalyticsClient(AnalyticsConfig.from_env())
-            atexit.register(shutdown)
+            if not _atexit_registered:
+                atexit.register(shutdown)
+                _atexit_registered = True
         return _client
 
 

@@ -1,5 +1,6 @@
 """Analytics: validation, privacy gates, queueing, Umami batching, failure isolation."""
 
+import atexit
 import json
 import logging
 import time
@@ -382,3 +383,74 @@ def test_module_track_uses_env_and_survives_errors(
 
     monkeypatch.setattr(client_mod, "get_client", broken)
     analytics.track("a.b")  # must not raise
+
+
+def test_clean_url_malformed_falls_back_to_root() -> None:
+    """A malformed URL becomes `/` instead of raising."""
+    assert clean_url("http://[bad") == "/"
+
+
+def test_non_json_and_non_object_200_replies_warn(caplog: pytest.LogCaptureFixture) -> None:
+    """A 200 reply that is not a JSON object is warned about, not raised."""
+
+    def html(request: httpx.Request) -> httpx.Response:
+        """Html."""
+        return httpx.Response(200, text="<html>proxy</html>")
+
+    c = analytics.AnalyticsClient(
+        AnalyticsConfig(backend="umami", endpoint="http://u", site_id="s"),
+        transport=httpx.MockTransport(html),
+        flush_interval=3600,
+    )
+    c.track("a.b")
+    with caplog.at_level(logging.WARNING):
+        c.flush()
+    assert "not JSON" in caplog.text
+    c.shutdown()
+
+    rec = Recorder(body=[1, 2])
+    c = umami(rec)
+    c.track("a.b")
+    c.flush()
+    assert len(rec.requests) == 1
+    c.shutdown()
+
+
+def test_flush_gives_up_after_first_transport_failure() -> None:
+    """An unreachable backend costs one timeout per flush, not one per chunk."""
+    calls: list[int] = []
+
+    def boom(request: httpx.Request) -> httpx.Response:
+        """Boom."""
+        calls.append(1)
+        raise httpx.ConnectTimeout("slow", request=request)
+
+    c = analytics.AnalyticsClient(
+        AnalyticsConfig(backend="umami", endpoint="http://u", site_id="s"),
+        transport=httpx.MockTransport(boom),
+        flush_interval=3600,
+    )
+    for _ in range(120):
+        c.track("a.b")
+    c.flush()
+    assert len(calls) == 1
+    c.shutdown()
+
+
+def test_track_after_stop_starts_no_thread_and_atexit_registers_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After shutdown a stopped client starts no thread; atexit is registered once."""
+    registered: list[object] = []
+    monkeypatch.setattr(client_mod, "_atexit_registered", False)
+    monkeypatch.setattr(atexit, "register", registered.append)
+    monkeypatch.setenv("ANALYTICS_BACKEND", "log")
+    client_mod.get_client()
+    analytics.shutdown()
+    client_mod.get_client()
+    assert len(registered) == 1
+
+    c = umami(Recorder())
+    c.shutdown()
+    c.track("a.b")
+    assert c._thread is None
