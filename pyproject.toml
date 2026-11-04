@@ -24,10 +24,10 @@ otel = [
     "opentelemetry-instrumentation-logging>=0.65b0,<1",
     "opentelemetry-instrumentation-fastapi>=0.65b0,<1",
     "opentelemetry-instrumentation-sqlalchemy>=0.65b0,<1",
-    "sqlalchemy[asyncio]>=2.1.6,<2.2",
+    "sqlalchemy[asyncio]>=2.0.54,<2.1",
 ]
 # Upper bound: opentelemetry-instrumentation-sqlalchemy supports < 2.1 only.
-sqlalchemy = ["sqlalchemy[asyncio]>=2.1.6,<2.2"]
+sqlalchemy = ["sqlalchemy[asyncio]>=2.0.54,<2.1"]
 redis = ["redis>=8.1.0,<9"]
 s3 = ["boto3>=1.43.98,<2"]
 http = ["httpx>=0.28.1,<1"]
@@ -120,6 +120,9 @@ addopts = "--strict-markers --strict-config -ra --ignore=tests/bench --cov=craft
 testpaths = ["tests/unit"]
 # Lets an `async def test_...` run without a per-test @pytest.mark.asyncio marker.
 asyncio_mode = "auto"
+# pytest-asyncio 1.4.1 warns while this is unset (an error under filterwarnings); "function"
+# is the default it is moving to.
+asyncio_default_fixture_loop_scope = "function"
 filterwarnings = [
     "error",
     # starlette's testclient still references the anyio.abc.BlockingPortal alias
