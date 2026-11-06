@@ -71,11 +71,20 @@ _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*")
 
 
 def redact_text(text: str) -> str:
-    """`text` with URL userinfo, secret key/value pairs, bearer credentials and JWTs hidden."""
-    text = _USERINFO.sub(rf"\1{REDACTED}@", text)
-    text = _PAIR.sub(rf"\g<key>\g<sep>{REDACTED}", text)
-    text = _BEARER.sub(rf"\1 {REDACTED}", text)
-    return _JWT.sub(REDACTED, text)
+    """`text` with URL userinfo, secret key/value pairs, bearer credentials and JWTs hidden.
+
+    Each rule is skipped by a plain substring test when the text cannot contain its trigger
+    (`://`, a `=` or `:`, `bearer`, `eyJ`), so ordinary log lines cost a few `in` checks.
+    """
+    if "://" in text:
+        text = _USERINFO.sub(rf"\1{REDACTED}@", text)
+    if "=" in text or ":" in text:
+        text = _PAIR.sub(rf"\g<key>\g<sep>{REDACTED}", text)
+    if "bearer" in text.lower():
+        text = _BEARER.sub(rf"\1 {REDACTED}", text)
+    if "eyJ" in text:
+        text = _JWT.sub(REDACTED, text)
+    return text
 
 
 def redact_value(key: str, value: object, _depth: int = 0) -> object:
