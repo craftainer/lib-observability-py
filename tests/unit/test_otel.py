@@ -15,13 +15,15 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from opentelemetry import metrics, trace
+from opentelemetry.attributes import BoundedAttributes
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
-from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace import Event, ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.sdk.util import BoundedList
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -363,10 +365,10 @@ def test_exporter_redacts_names_and_keeps_dropped_counts() -> None:
     (done,) = capture.spans
     assert done.name == "GET /login password=[REDACTED]"
     assert done.events[0].name == "retry token=[REDACTED]"
-    source = otel.ReadableSpan(
+    source = ReadableSpan(
         "n",
-        attributes=otel.BoundedAttributes(1, {"a": 1, "b": 2}),
-        events=otel.BoundedList.from_seq(1, [otel.Event("e", {"x": 1})]),
+        attributes=BoundedAttributes(1, {"a": 1, "b": 2}),
+        events=BoundedList.from_seq(1, [Event("e", {"x": 1})]),
     )
     copy = otel._redact_span(source)
     assert (copy.dropped_attributes, len(copy.attributes or {})) == (1, 1)
@@ -376,12 +378,13 @@ def test_unredactable_span_is_exported_without_its_content(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """If scrubbing a span raises, the span goes out empty, not raw."""
+
     def boom(_value: str) -> str:
         raise RuntimeError("boom")
 
     monkeypatch.setattr(otel, "redact_text", boom)
-    source = otel.ReadableSpan("secret=1", attributes={"a": "password=x"})
+    source = ReadableSpan("secret=1", attributes={"a": "password=x"})
     copy = otel._redact_span(source)
-    assert copy.name == otel.REDACTED
+    assert copy.name == "[REDACTED]"
     assert not copy.attributes
     assert not copy.events

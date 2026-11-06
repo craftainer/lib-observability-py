@@ -8,6 +8,7 @@ change here is a change there. Not a parser: it over-redacts rather than leak.
 
 import re
 from collections.abc import Iterable, Mapping
+from functools import lru_cache
 
 REDACTED = "[REDACTED]"
 
@@ -36,10 +37,16 @@ REDACTION_KEYS: tuple[str, ...] = (
 _MAX_DEPTH = 4
 
 
+_SENSITIVE_KEY = re.compile("|".join(map(re.escape, REDACTION_KEYS)))
+
+
+@lru_cache(maxsize=2048)
 def is_sensitive_key(key: str) -> bool:
-    """Whether a log field, header or attribute named `key` should have its value redacted."""
-    normalised = key.lower().replace("-", "_")
-    return any(entry in normalised for entry in REDACTION_KEYS)
+    """Whether a log field, header or attribute named `key` should have its value redacted.
+
+    Cached: field names come from code and a small set of headers, and the answer is pure.
+    """
+    return _SENSITIVE_KEY.search(key.lower().replace("-", "_")) is not None
 
 
 def _key_pattern(entry: str) -> str:
@@ -84,7 +91,9 @@ _AUTH = re.compile(
 # (backslash escapes honoured; unterminated runs to the end), the same inside JSON that
 # was escaped once more (`\"hunter2\"`), or a run up to whitespace or a quote.
 _PAIR = re.compile(
-    r"(?P<key>(?:" + "|".join(_key_pattern(entry) for entry in REDACTION_KEYS) + r")"
+    r"(?P<key>(?:"
+    + "|".join(_key_pattern(entry) for entry in REDACTION_KEYS)
+    + r")"
     + _KEY_TAIL
     + r")"
     r"""(?P<sep>\\?["']? *[=:] *)"""
@@ -98,9 +107,7 @@ _PAIR = re.compile(
 # no `key=` precedes, e.g. `logger.info("login %s", token)`. The JWT parts are bounded and
 # possessive, so `eyJ-eyJ-...` cannot make the scan quadratic.
 _BEARER = re.compile(r"\b(bearer) +[A-Za-z0-9._~+/=-]{1,4096}", re.IGNORECASE)
-_JWT = re.compile(
-    r"\beyJ[A-Za-z0-9_-]{1,4096}+\.[A-Za-z0-9_-]{1,4096}+\.[A-Za-z0-9_-]{0,4096}+"
-)
+_JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{1,4096}+\.[A-Za-z0-9_-]{1,4096}+\.[A-Za-z0-9_-]{0,4096}+")
 
 
 def redact_text(text: str) -> str:

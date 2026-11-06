@@ -49,8 +49,8 @@ def build_health_router(
     `/ready` is unauthenticated and every call would hit every dependency, so its result is
     cached for `ready_cache_ttl` seconds (`0` turns the cache off) and concurrent requests
     share one run of the checks. The cache belongs to the router, so `get_registry` is
-    expected to return the application's one registry. Mount the router on an internal port (or a path the edge
-    does not route) rather than the public one.
+    expected to return the application's one registry. Mount the router on an internal port
+    (or a path the edge does not route) rather than the public one.
     """
     router = APIRouter(tags=["health"])
     # One lock per event loop: an `asyncio.Lock` binds to the loop that first contends it,

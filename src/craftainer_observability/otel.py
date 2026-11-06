@@ -134,7 +134,8 @@ def _redact_span(span: ReadableSpan) -> ReadableSpan:
         attributes = _bounded(_redact_attributes(span.attributes), span.dropped_attributes)
     except Exception:  # fail closed: a span we cannot scrub must not go out as it is
         logger.exception("Span redaction failed; exporting the span without its content")
-        name, attributes, events, links = REDACTED, None, [], []
+        name, attributes = REDACTED, None
+        events, links = BoundedList[Event](None), BoundedList[Link](None)
         status = Status(span.status.status_code)
     return ReadableSpan(
         name=name,

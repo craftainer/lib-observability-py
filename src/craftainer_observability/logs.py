@@ -96,7 +96,7 @@ class RedactingFilter(logging.Filter):
         """
         try:
             return self._redacted(record)
-        except Exception:  # noqa: BLE001 -- fail closed, whatever went wrong
+        except Exception:
             return self._blank(record)
 
     @staticmethod
