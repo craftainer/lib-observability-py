@@ -15,8 +15,8 @@ GEOS = ("none", "coarse")
 class AnalyticsConfigError(ValueError):
     """An `ANALYTICS_*` variable has a value that cannot be honoured; fix it and restart.
 
-    Raised for the settings where guessing would fail open: an unknown `ANALYTICS_CONSENT`
-    or `ANALYTICS_ENABLED`, and an `ANALYTICS_ENDPOINT` that is not a usable http(s) URL.
+    Unknown configuration fails closed: an unknown `ANALYTICS_ENABLED`, `_BACKEND`, `_CONSENT`,
+    `_GEO` or `_RESPECT_GPC`, and an `ANALYTICS_ENDPOINT` that is not a usable http(s) URL.
     """
 
 
@@ -25,8 +25,8 @@ _FALSE = frozenset({"0", "false", "no", "off"})
 _LOOPBACK = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
-def _flag(name: str, *, default: bool, strict: bool = False) -> bool:
-    """A boolean variable. `strict` raises on an unknown value; otherwise it keeps `default`."""
+def _flag(name: str, *, default: bool) -> bool:
+    """A boolean variable; an unknown value raises."""
     value = os.environ.get(name, "").strip().lower()
     if not value:
         return default
@@ -34,24 +34,18 @@ def _flag(name: str, *, default: bool, strict: bool = False) -> bool:
         return True
     if value in _FALSE:
         return False
-    if strict:
-        msg = f"{name}={value!r} is not a boolean; use one of {sorted(_TRUE | _FALSE)}"
-        raise AnalyticsConfigError(msg)
-    logger.warning("%s=%r is not a boolean; using %r", name, value, default)
-    return default
+    msg = f"{name}={value!r} is not a boolean; use one of {sorted(_TRUE | _FALSE)}"
+    raise AnalyticsConfigError(msg)
 
 
-def _choice(name: str, allowed: tuple[str, ...], default: str, *, strict: bool = False) -> str:
-    """A choice variable. `strict` raises on an unknown value; otherwise it keeps `default`."""
+def _choice(name: str, allowed: tuple[str, ...], default: str) -> str:
+    """A choice variable; an unknown value raises."""
     value = os.environ.get(name, "").strip().lower()
     if not value:
         return default
     if value not in allowed:
-        if strict:
-            msg = f"{name}={value!r} is not one of {allowed}"
-            raise AnalyticsConfigError(msg)
-        logger.warning("%s=%r is not one of %s; using %r", name, value, allowed, default)
-        return default
+        msg = f"{name}={value!r} is not one of {allowed}"
+        raise AnalyticsConfigError(msg)
     return value
 
 
@@ -98,19 +92,18 @@ class AnalyticsConfig:
     def from_env(cls) -> AnalyticsConfig:
         """Read the settings.
 
-        Raises `AnalyticsConfigError` for an unknown `ANALYTICS_CONSENT` or
-        `ANALYTICS_ENABLED` (guessing either would fail open) and for an unusable
-        `ANALYTICS_ENDPOINT`. Other unknown values (`_BACKEND`, `_GEO`, `_RESPECT_GPC`)
-        log a warning and fall back to the safe default. Call it at startup to fail fast.
+        Raises `AnalyticsConfigError` for any unknown value (`_ENABLED`, `_BACKEND`, `_CONSENT`,
+        `_GEO`, `_RESPECT_GPC`) and for an unusable `ANALYTICS_ENDPOINT`. Call it at startup
+        to fail fast.
         """
         keys = os.environ.get("ANALYTICS_PROP_KEYS", "")
         return cls(
-            enabled=_flag("ANALYTICS_ENABLED", default=True, strict=True),
+            enabled=_flag("ANALYTICS_ENABLED", default=True),
             backend=_choice("ANALYTICS_BACKEND", BACKENDS, "none"),
             endpoint=_endpoint(),
             site_id=os.environ.get("ANALYTICS_SITE_ID", "").strip(),
             hostname=os.environ.get("ANALYTICS_HOSTNAME", "").strip(),
-            consent=_choice("ANALYTICS_CONSENT", CONSENTS, "implied", strict=True),
+            consent=_choice("ANALYTICS_CONSENT", CONSENTS, "implied"),
             respect_gpc=_flag("ANALYTICS_RESPECT_GPC", default=True),
             geo=_choice("ANALYTICS_GEO", GEOS, "none"),
             prop_keys=frozenset(k.strip() for k in keys.split(",") if k.strip()),

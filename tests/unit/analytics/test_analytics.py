@@ -120,14 +120,21 @@ def test_config_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     )  # fmt: skip
 
 
-def test_config_unknown_choice_falls_back(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("ANALYTICS_BACKEND", "bogus"),
+        ("ANALYTICS_GEO", "fine"),
+        ("ANALYTICS_RESPECT_GPC", "maybe"),
+    ],
+)
+def test_config_unknown_value_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
 ) -> None:
-    """Config unknown choice falls back."""
-    monkeypatch.setenv("ANALYTICS_BACKEND", "bogus")
-    with caplog.at_level(logging.WARNING):
-        assert AnalyticsConfig.from_env().backend == "none"
-    assert "bogus" in caplog.text
+    """An unknown backend, geo or GPC value is a startup error, not a silent default."""
+    monkeypatch.setenv(name, value)
+    with pytest.raises(analytics.AnalyticsConfigError, match=name):
+        AnalyticsConfig.from_env()
 
 
 def test_umami_payload_and_headers() -> None:
@@ -593,16 +600,6 @@ def test_enabled_accepts_only_known_booleans(
     """The known spellings parse; the kill switch is not left on by a guess."""
     monkeypatch.setenv("ANALYTICS_ENABLED", value)
     assert AnalyticsConfig.from_env().enabled is expected
-
-
-def test_unknown_respect_gpc_stays_safe_and_warns(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """An unparseable ANALYTICS_RESPECT_GPC keeps the safe default (respect) with a warning."""
-    monkeypatch.setenv("ANALYTICS_RESPECT_GPC", "maybe")
-    with caplog.at_level(logging.WARNING):
-        assert AnalyticsConfig.from_env().respect_gpc is True
-    assert "ANALYTICS_RESPECT_GPC" in caplog.text
 
 
 def test_plain_http_endpoint_warns_unless_loopback(

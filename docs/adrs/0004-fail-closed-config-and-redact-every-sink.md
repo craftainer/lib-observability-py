@@ -27,11 +27,10 @@ The OWASP review of 2026-11-04 (OW-lib-observability-py) found, in this library 
 ## Decision
 
 - `AnalyticsConfig.from_env()` raises `AnalyticsConfigError` (a `ValueError`) for an
-  unknown `ANALYTICS_CONSENT` or `ANALYTICS_ENABLED` (accepted booleans: `1/true/yes/on`,
-  `0/false/no/off`) and for an `ANALYTICS_ENDPOINT` that is not an http(s) URL with a
+  unknown `ANALYTICS_ENABLED`, `_BACKEND`, `_CONSENT`, `_GEO` or `_RESPECT_GPC` (accepted
+  booleans: `1/true/yes/on`, `0/false/no/off`) and for an `ANALYTICS_ENDPOINT` that is not an http(s) URL with a
   host and without embedded credentials. Plain `http` to a non-loopback host logs a
-  warning. Unknown `_BACKEND`, `_GEO` and `_RESPECT_GPC` keep their safe defaults and
-  warn. An application calls `from_env()` at startup to fail fast; `track()` itself
+  warning. Unknown configuration is fail-closed, matching `lib-observability-rs`. An application calls `from_env()` at startup to fail fast; `track()` itself
   never raises, so with an invalid configuration it tracks nothing and logs the cause at
   ERROR once. A failed delivery logs a WARNING (with the number of dropped events) at the
   first failure of an outage and DEBUG until a delivery succeeds again.
