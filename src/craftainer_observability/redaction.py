@@ -1,7 +1,7 @@
 """One shared credential-redaction rule set for every sink (logs, OTLP logs, spans, health).
 
 `REDACTION_KEYS` is the single key list. A key is sensitive when, after lowercasing and
-dropping `-` and `_`, it contains any entry (`X-Api-Key`, `db_password` and `Set-Cookie`
+with `-` read as `_`, it contains any entry (`X-Api-Key`, `db_password` and `Set-Cookie`
 all match). `lib-observability-rs` mirrors this list and the text patterns below, so a
 change here is a change there. Not a parser: it over-redacts rather than leak.
 """
@@ -20,30 +20,31 @@ REDACTION_KEYS: tuple[str, ...] = (
     "authorization",
     "claims",
     "credential",
+    "api_key",
     "apikey",
-    "accesskey",
-    "privatekey",
+    "access_key",
     "cookie",
     "bearer",
     "jwt",
     "session",
     "dsn",
+    "private",
     "signature",
 )
-"""Canonical form: lowercase, no `-` or `_`. Matched as a substring of the normalised key."""
+"""Lowercase. A key is sensitive when its lowercased form contains an entry."""
 
 _MAX_DEPTH = 4
 
 
 def is_sensitive_key(key: str) -> bool:
     """Whether a log field, header or attribute named `key` should have its value redacted."""
-    normalised = key.lower().replace("-", "").replace("_", "")
+    normalised = key.lower().replace("-", "_")
     return any(entry in normalised for entry in REDACTION_KEYS)
 
 
 def _key_pattern(entry: str) -> str:
-    """`apikey` -> a pattern that also accepts `api_key` and `api-key`."""
-    return "[-_]?".join(re.escape(char) for char in entry)
+    """`api_key` -> a pattern that also accepts `api-key` and `apikey`."""
+    return "[-_]?".join(re.escape(part) for part in entry.split("_"))
 
 
 # `scheme://user:pass@host` -> `scheme://[REDACTED]@host`. The userinfo runs to the last

@@ -11,10 +11,13 @@ from craftainer_observability.redaction import (
 )
 
 
-def test_key_list_is_canonical() -> None:
-    """The list is lowercase with no separators, so the rs mirror can copy it verbatim."""
-    assert all(key == key.lower() and "-" not in key and "_" not in key for key in REDACTION_KEYS)
-    assert len(set(REDACTION_KEYS)) == len(REDACTION_KEYS)
+def test_key_list_is_the_agreed_one() -> None:
+    """The list is the one `lib-observability-rs` uses verbatim."""
+    assert REDACTION_KEYS == (
+        "token", "password", "passwd", "pwd", "secret", "authorization", "claims",
+        "credential", "api_key", "apikey", "access_key", "cookie", "bearer", "jwt",
+        "session", "dsn", "private", "signature",
+    )  # fmt: skip
 
 
 @pytest.mark.parametrize(
@@ -35,6 +38,9 @@ def test_key_list_is_canonical() -> None:
         "claims",
         "bearer",
         "private_key",
+        "PrivateKey",
+        "access-key",
+        "apikey",
         "credentials",
         "pwd",
     ],

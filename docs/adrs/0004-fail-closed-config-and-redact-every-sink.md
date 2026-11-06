@@ -36,8 +36,9 @@ The OWASP review of 2026-11-04 (OW-lib-observability-py) found, in this library 
   ERROR once. A failed delivery logs a WARNING (with the number of dropped events) at the
   first failure of an outage and DEBUG until a delivery succeeds again.
 - One key list, `redaction.REDACTION_KEYS`, drives every sink (`lib-observability-rs`
-  mirrors it). A key is sensitive when, lowercased with `-` and `_` removed, it contains
-  an entry. The text rules are URL userinfo, `key=value` pairs, a bare `Bearer` credential
+  mirrors it). A key is sensitive when its lowercased form (`-` read as `_`) contains
+  an entry: token, password, passwd, pwd, secret, authorization, claims, credential,
+  api_key, apikey, access_key, cookie, bearer, jwt, session, dsn, private, signature. The text rules are URL userinfo, `key=value` pairs, a bare `Bearer` credential
   and a bare JWT. `health.redact` is the same rule set.
 - Redaction is record-level. `logs.RedactingFilter` sits on both the stdout and the OTLP
   handler and returns a redacted copy (message with its arguments applied, `extra`

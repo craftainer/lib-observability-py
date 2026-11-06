@@ -79,9 +79,9 @@ DSN's userinfo or a `password=...` pair does not reach the logs either.
 
 `redaction.py` is the one rule set every sink uses ([ADR 0004](../../docs/adrs/0004-fail-closed-config-and-redact-every-sink.md)).
 `REDACTION_KEYS` (`token`, `password`, `passwd`, `pwd`, `secret`, `authorization`,
-`claims`, `credential`, `apikey`, `accesskey`, `privatekey`, `cookie`, `bearer`, `jwt`,
-`session`, `dsn`, `signature`) is matched as a substring of a key lowercased with `-` and `_`
-removed, so `X-Api-Key`, `db_password` and `Set-Cookie` all match; the text rules also hide
+`claims`, `credential`, `api_key`, `apikey`, `access_key`, `cookie`, `bearer`, `jwt`,
+`session`, `dsn`, `private`, `signature`) is matched as a substring of the lowercased key (`-`
+read as `_`), so `X-Api-Key`, `db_password` and `Set-Cookie` all match; the text rules also hide
 URL userinfo, `key=value` pairs, a bare `Bearer ...` and a bare JWT. `lib-observability-rs`
 mirrors the list. It is applied by `logs.RedactingFilter` (stdout and OTLP log handlers),
 the JSON formatter, `otel.RedactingSpanExporter` and `health.redact`.
