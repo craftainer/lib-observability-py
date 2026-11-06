@@ -18,7 +18,10 @@ This module imports nothing from `app`.
 """
 
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import cast
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import FastAPI
 from opentelemetry import metrics, trace
@@ -28,14 +31,112 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import MetricReader, PeriodicExportingMetricReader
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.trace import Event, ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, SpanExportResult
+from opentelemetry.trace import Link, Status
+from opentelemetry.util.types import Attributes, AttributeValue
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from craftainer_observability.logs import exporter_enabled, otlp_enabled, shared_resource
+from craftainer_observability.redaction import REDACTED, is_sensitive_key, redact_text
 
 # Probes would otherwise flood traces; used only when the standard variable is unset.
 DEFAULT_EXCLUDED_URLS = "/health/.*"
+
+
+_URL_ATTRIBUTES = frozenset({"http.url", "url.full", "http.target", "url.path"})
+"""Span attributes the ASGI instrumentation fills from the request; the query is cut."""
+_QUERY_ATTRIBUTES = frozenset({"url.query"})
+"""Span attributes that are the query string itself; dropped."""
+
+
+def _strip_query(value: str) -> str:
+    """`value` (a URL or a request target) without its query string and fragment."""
+    if "?" not in value and "#" not in value:
+        return value
+    parts = urlsplit(value)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+
+
+def _redact_attributes(attributes: Attributes) -> Attributes:
+    """Attributes with the request query stripped and credential keys and values hidden."""
+    if not attributes:
+        return attributes
+    clean: dict[str, AttributeValue] = {}
+    for key, value in attributes.items():
+        if key in _QUERY_ATTRIBUTES:
+            continue
+        if key in _URL_ATTRIBUTES and isinstance(value, str):
+            value = _strip_query(value)  # noqa: PLW2901
+        if is_sensitive_key(key):
+            clean[key] = REDACTED
+        elif isinstance(value, str):
+            clean[key] = redact_text(value)
+        elif isinstance(value, Sequence) and not isinstance(value, bytes):
+            clean[key] = cast(
+                "AttributeValue",
+                [redact_text(item) if isinstance(item, str) else item for item in value],
+            )
+        else:
+            clean[key] = value
+    return clean
+
+
+def _redact_span(span: ReadableSpan) -> ReadableSpan:
+    """A copy of `span` safe to export: attributes, events, links and status redacted."""
+    events = [
+        Event(
+            event.name,
+            _redact_attributes(event.attributes),
+            event.timestamp,
+        )
+        for event in span.events
+    ]
+    links = [Link(link.context, _redact_attributes(link.attributes)) for link in span.links]
+    status = span.status
+    if status.description:
+        status = Status(status.status_code, redact_text(status.description))
+    return ReadableSpan(
+        name=span.name,
+        context=span.context,
+        parent=span.parent,
+        resource=span.resource,
+        attributes=_redact_attributes(span.attributes),
+        events=events,
+        links=links,
+        kind=span.kind,
+        status=status,
+        start_time=span.start_time,
+        end_time=span.end_time,
+        instrumentation_scope=span.instrumentation_scope,
+    )
+
+
+class RedactingSpanExporter(SpanExporter):
+    """Wraps a span exporter so nothing it sends carries a credential or a request query.
+
+    Applies the shared key list (`redaction.REDACTION_KEYS`) to attribute keys and the
+    shared text patterns to attribute values, exception events and the status
+    description, and removes the query string from the ASGI URL attributes
+    (`http.url`, `url.full`, `http.target`, `url.path`; `url.query` is dropped), so
+    `/x?token=abc` is exported as `/x`.
+    """
+
+    def __init__(self, inner: SpanExporter) -> None:
+        """Wrap `inner`."""
+        self._inner = inner
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        """Export redacted copies of `spans`."""
+        return self._inner.export([_redact_span(span) for span in spans])
+
+    def shutdown(self) -> None:
+        """Shut `inner` down."""
+        self._inner.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        """Flush `inner`."""
+        return self._inner.force_flush(timeout_millis)
 
 
 @dataclass(frozen=True)
@@ -55,7 +156,9 @@ def configure_telemetry() -> None:
     resource = shared_resource()
     tracer_provider = TracerProvider(resource=resource)
     if exporter_enabled("traces"):
-        tracer_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+        tracer_provider.add_span_processor(
+            BatchSpanProcessor(RedactingSpanExporter(OTLPSpanExporter()))
+        )
     readers: list[MetricReader] = []
     if exporter_enabled("metrics"):
         readers.append(PeriodicExportingMetricReader(OTLPMetricExporter()))

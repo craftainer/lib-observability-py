@@ -33,15 +33,18 @@ manual/pre-push stage, same as mypy).
   logged), so one hung dependency cannot stall `/ready`. `register` raises
   `ValueError` for a name that is already registered, because `/ready` keys its
   response by name and a duplicate would hide a failing check.
-- `redact.py` — `redact(text)`, which replaces URL userinfo
-  (`scheme://user:pass@host`) and `password`/`passwd`/`pwd`/`token`/`secret`/
-  `secret_key`/`api_key`/`apikey`/`access_key` `key=value` or `key: value` pairs with
-  `[REDACTED]`. A safety net that over-redacts rather than leak; the same patterns as
-  `lib-observability-rs`. Not a layer of the graph below: the checks use it.
-- `router.py` — `build_health_router(get_registry)`, a factory that
+- `redact.py` — `redact(text)` and `log_failure`; `redact` is `redaction.redact_text`, the
+  shared rule set described under "Redaction" below (URL userinfo, `key=value` pairs, bearer
+  credentials, JWTs). A safety net that over-redacts rather than leak. Not a layer of the
+  graph below: the checks use it.
+- `router.py` — `build_health_router(get_registry, ready_cache_ttl=1.0)`, a factory that
   builds the `/live`/`/ready` router against whatever
   `Callable[..., HealthRegistry]` the caller passes in as a FastAPI
-  dependency.
+  dependency. `/ready` keeps its last result for `ready_cache_ttl` seconds (`0` turns the
+  cache off) and concurrent requests share one run of the checks, so a flood of probes
+  costs one round of dependency calls per TTL. `/ready` is unauthenticated: mount this
+  router on an internal port (a second ASGI app or listener the ingress does not route),
+  not on the public one.
 
 ```mermaid
 graph LR
@@ -63,7 +66,7 @@ library only inside its own module. A check's `name` defaults to the service
 | --- | --- | --- | --- |
 | `PostgresCheck` | `checks/postgres.py` | `[sqlalchemy]` | `PostgresCheck(engine)`, an `AsyncEngine`; runs `SELECT 1` |
 | `RedisCheck` | `checks/redis.py` | `[redis]` | `RedisCheck(url)`; PINGs over one client reused by every check (per event loop; `await check.aclose()` on shutdown) |
-| `S3Check` | `checks/s3.py` | `[s3]` | `S3Check(client)`, a boto3 S3 client; calls `ListBuckets` in a thread |
+| `S3Check` | `checks/s3.py` | `[s3]` | `S3Check(client)`, a boto3 S3 client; calls `ListBuckets` on the check's own single-thread executor; a call that outlives the timeout is awaited by the next check, never duplicated (`close()` on shutdown) |
 | `HTTPCheck` | `checks/http.py` | `[http]` | `HTTPCheck(url, timeout=5)`; GETs the full URL (e.g. an OIDC discovery document) |
 
 Each catches its own client library's errors, logs them, and returns an
@@ -72,12 +75,26 @@ exception text can embed credentials, so it goes to the logs only; `/ready` is
 unauthenticated). The logged error and traceback pass through `redact` first, so a
 DSN's userinfo or a `password=...` pair does not reach the logs either.
 
+## Redaction
+
+`redaction.py` is the one rule set every sink uses ([ADR 0004](../../docs/adrs/0004-fail-closed-config-and-redact-every-sink.md)).
+`REDACTION_KEYS` (`token`, `password`, `passwd`, `pwd`, `secret`, `authorization`,
+`claims`, `credential`, `apikey`, `accesskey`, `privatekey`, `cookie`, `bearer`, `jwt`,
+`session`, `dsn`, `signature`) is matched as a substring of a key lowercased with `-` and `_`
+removed, so `X-Api-Key`, `db_password` and `Set-Cookie` all match; the text rules also hide
+URL userinfo, `key=value` pairs, a bare `Bearer ...` and a bare JWT. `lib-observability-rs`
+mirrors the list. It is applied by `logs.RedactingFilter` (stdout and OTLP log handlers),
+the JSON formatter, `otel.RedactingSpanExporter` and `health.redact`.
+
 ## logs
 
 `logs.py`'s `configure_logging()` attaches a JSON-formatting stdout handler to the
-root logger (with credential-shaped `extra=` keys redacted) and, when
+root logger and, when
 `OTEL_EXPORTER_OTLP_ENDPOINT` is set, bridges the root logger to an OTLP log
-exporter. The OTel `service.name` comes from OTel's standard `OTEL_SERVICE_NAME`
+exporter. Both handlers carry a `RedactingFilter`, which redacts at record level: the
+message (arguments applied), every `extra=` field, stack info and the exception (the
+traceback, and the `exception.*` attributes the OTLP bridge builds), without altering the
+record a host's own handlers see. The OTel `service.name` comes from OTel's standard `OTEL_SERVICE_NAME`
 env var (`Resource.create()` reads it itself); the module imports neither `app`
 nor its settings. `configure_logging()` is idempotent: a second call replaces the
 handlers the first installed (handlers the host added are left alone) instead of
@@ -93,7 +110,10 @@ first call that enables export fixes its exporter settings.
 `instrument_engine(engine)` (query spans and connection-pool metrics). All three are
 no-ops unless telemetry is configured. All three signals share one `Resource`
 (`logs.shared_resource()`); metrics and traces are pushed over OTLP/HTTP, and there is
-no `/metrics` endpoint. The SQLAlchemy instrumentation already emits pool usage
+no `/metrics` endpoint. The OTLP span exporter is wrapped in `RedactingSpanExporter`:
+credential attributes, exception events and the status text are redacted, and the query
+string is removed from `http.url`, `url.full`, `http.target` and `url.path` (the ASGI
+instrumentation records it; `url.query` is dropped), so `/x?token=abc` is exported as `/x`. The SQLAlchemy instrumentation already emits pool usage
 (`db.client.connections.usage`, `state` = `idle`/`used`), so there are no extra gauges.
 Every JSON log line carries `trace_id`/`span_id` while a span is active.
 

@@ -4,11 +4,13 @@ import json
 import logging
 import sys
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 from opentelemetry.instrumentation.logging.handler import LoggingHandler
 
-from craftainer_observability.logs import _JSONFormatter, configure_logging
+from craftainer_observability import logs as logs_mod
+from craftainer_observability.logs import RedactingFilter, _JSONFormatter, configure_logging
 from craftainer_observability.middleware import _request_id
 
 
@@ -155,3 +157,92 @@ def test_configure_logging_keeps_disabled_uvicorn_access_log_disabled() -> None:
     configure_logging()
     assert access.handlers == []
     assert access.propagate is False
+
+
+def _raise_with_secret() -> Any:  # noqa: ANN401
+    """An `exc_info` triple for an error whose text embeds a DSN."""
+    try:
+        raise ValueError("connect failed: postgres://app:hunter2@db/x")
+    except ValueError:
+        return sys.exc_info()
+
+
+def _record_with_secrets() -> logging.LogRecord:
+    """A record with secrets in the message args, extras, stack info and exception."""
+    record = logging.LogRecord(
+        "app.test", logging.ERROR, __file__, 1, "login %s", ("token=abc123",), _raise_with_secret()
+    )
+    record.__dict__["api_key"] = "hunter2"
+    record.note = "api_key=zzz"
+    record.stack_info = "stack password=hunter2"
+    return record
+
+
+def test_filter_redacts_message_extras_stack_and_exception_without_touching_original() -> None:
+    """The redacting filter returns a clean copy and leaves the shared record alone."""
+    record = _record_with_secrets()
+    clean = RedactingFilter().filter(record)
+    assert isinstance(clean, logging.LogRecord)
+    dumped = json.dumps(clean.__dict__, default=str)
+    for secret in ("abc123", "hunter2", "zzz"):
+        assert secret not in dumped
+    assert clean.exc_info is None
+    assert clean.exc_text is not None
+    assert "ValueError" in clean.exc_text
+    assert "exception.stacktrace" not in clean.__dict__
+    assert record.exc_info is not None
+    assert record.__dict__["api_key"] == "hunter2"
+
+
+def test_filter_adds_redacted_otel_exception_attributes() -> None:
+    """For the OTLP handler the filter supplies exception.* attributes, redacted."""
+    clean = RedactingFilter(otel_exception_attributes=True).filter(_record_with_secrets())
+    assert isinstance(clean, logging.LogRecord)
+    assert clean.__dict__["exception.type"] == "ValueError"
+    assert "hunter2" not in clean.__dict__["exception.message"]
+    assert "hunter2" not in clean.__dict__["exception.stacktrace"]
+    assert "postgres://[REDACTED]@db/x" in clean.__dict__["exception.message"]
+
+
+def test_filter_redacts_an_already_formatted_exc_text() -> None:
+    """A record whose traceback was formatted earlier (exc_text, no exc_info) is scrubbed."""
+    record = logging.LogRecord("app.test", logging.ERROR, __file__, 1, "x", (), None)
+    record.exc_text = "Traceback ... password=hunter2"
+    clean = RedactingFilter().filter(record)
+    assert isinstance(clean, logging.LogRecord)
+    assert clean.exc_text == "Traceback ... password=[REDACTED]"
+    payload = json.loads(_JSONFormatter().format(clean))
+    assert payload["exception"] == "Traceback ... password=[REDACTED]"
+
+
+def test_json_formatter_redacts_message_and_exception_on_its_own() -> None:
+    """Even without the filter the formatter redacts the message and the traceback."""
+    payload = json.loads(_JSONFormatter().format(_record_with_secrets()))
+    assert "hunter2" not in json.dumps(payload)
+    assert "abc123" not in json.dumps(payload)
+    assert "ValueError" in payload["exception"]
+
+
+@pytest.mark.usefixtures("_clean_root_handlers")
+def test_configure_logging_filters_every_handler(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both the stdout and the OTLP bridge handler carry a RedactingFilter."""
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
+    configure_logging()
+    owned = [h for h in logging.getLogger().handlers if getattr(h, logs_mod._OWNED, False)]
+    assert len(owned) == 2
+    assert all(any(isinstance(f, RedactingFilter) for f in h.filters) for h in owned)
+    otel_handler = next(h for h in owned if isinstance(h, LoggingHandler))
+    exported: list[logging.LogRecord] = []
+    monkeypatch.setattr(otel_handler, "emit", exported.append)
+    logging.getLogger("app.otlp").error("x %s", "password=hunter2", exc_info=_raise_with_secret())
+    assert "hunter2" not in json.dumps([r.__dict__ for r in exported], default=str)
+
+
+def test_filter_passes_a_plain_record_through_redacted() -> None:
+    """A record with no exception and no cached traceback just gets its message scrubbed."""
+    record = logging.LogRecord("app.test", logging.INFO, __file__, 1, "token=%s", ("abc",), None)
+    clean = RedactingFilter().filter(record)
+    assert isinstance(clean, logging.LogRecord)
+    assert clean.getMessage() == "token=[REDACTED]"
+    assert clean.exc_text is None
+    assert clean.args is None

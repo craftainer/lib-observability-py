@@ -12,6 +12,7 @@ with `RequestIDMiddleware` it also carries `request_id`.
 This module imports nothing from `app`.
 """
 
+import copy
 import json
 import logging
 import os
@@ -29,22 +30,9 @@ from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
 
 from craftainer_observability.middleware import get_request_id
+from craftainer_observability.redaction import redact_text, redact_value
 
 _RESERVED_LOG_RECORD_ATTRS = frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__dict__)
-
-# _JSONFormatter.format below passes every non-reserved LogRecord attribute through
-# verbatim, so a future `logger.info(..., extra={"token": ...})` (or "password"/
-# "authorization"/"claims"/etc.) would otherwise leak that value into stdout/OTLP as
-# plain text. A substring match, not an exact-name allowlist, so a differently-cased
-# or prefixed key (e.g. "access_token", "Authorization") is caught too.
-_REDACTED_EXTRA_KEY_SUBSTRINGS = (
-    "token",
-    "password",
-    "secret",
-    "authorization",
-    "claims",
-    "credential",
-)
 
 
 _UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
@@ -82,12 +70,49 @@ def shared_resource() -> Resource:
     return resource
 
 
-def _redact_extra(key: str, value: Any) -> Any:  # noqa: ANN401
-    """Replace `value` with a placeholder if `key` looks like it holds a credential."""
-    lowered = key.lower()
-    if any(substring in lowered for substring in _REDACTED_EXTRA_KEY_SUBSTRINGS):
-        return "[REDACTED]"
-    return value
+class RedactingFilter(logging.Filter):
+    """Record-level redaction, installed on every handler `configure_logging` adds.
+
+    Returns a redacted copy (Python 3.12+ handlers use a filter's returned record), so the
+    stdout and the OTLP handler each redact on their own and a host's handlers still see
+    the original. It covers the message (`msg` with `args` applied), every `extra=` field
+    (by key, with the shared `redaction.REDACTION_KEYS`, and by value), `stack_info` and
+    the exception: the traceback becomes redacted `exc_text`, and, with
+    `otel_exception_attributes`, the OTel `exception.*` attributes the bridge would
+    otherwise build from the raw `exc_info`.
+    """
+
+    def __init__(self, *, otel_exception_attributes: bool = False) -> None:
+        """Build the filter; the OTLP handler's passes `otel_exception_attributes=True`."""
+        super().__init__()
+        self._otel = otel_exception_attributes
+
+    def filter(self, record: logging.LogRecord) -> bool | logging.LogRecord:
+        """Return a redacted copy of `record`."""
+        clean = copy.copy(record)
+        clean.msg = redact_text(record.getMessage())
+        clean.args = None
+        for key, value in record.__dict__.items():
+            if key not in _RESERVED_LOG_RECORD_ATTRS:
+                clean.__dict__[key] = redact_value(key, value)
+        if record.stack_info:
+            clean.stack_info = redact_text(record.stack_info)
+        if record.exc_info is not None and record.exc_info[0] is not None:
+            clean.exc_text = redact_text(_format_exception(record.exc_info))
+            clean.exc_info = None
+            if self._otel:
+                exc_type, exc_value, _ = record.exc_info
+                clean.__dict__["exception.type"] = exc_type.__qualname__
+                clean.__dict__["exception.message"] = redact_text(str(exc_value))
+                clean.__dict__["exception.stacktrace"] = clean.exc_text
+        elif record.exc_text:
+            clean.exc_text = redact_text(record.exc_text)
+        return clean
+
+
+def _format_exception(exc_info: Any) -> str:  # noqa: ANN401
+    """The traceback text of an `exc_info` triple, as `Formatter.formatException` renders it."""
+    return logging.Formatter().formatException(exc_info)
 
 
 class _JSONFormatter(logging.Formatter):
@@ -99,11 +124,11 @@ class _JSONFormatter(logging.Formatter):
             "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
-            "message": record.getMessage(),
+            "message": redact_text(record.getMessage()),
         }
         for key, value in record.__dict__.items():
             if key not in _RESERVED_LOG_RECORD_ATTRS:
-                payload[key] = _redact_extra(key, value)
+                payload[key] = redact_value(key, value)
         span_context = trace.get_current_span().get_span_context()
         if span_context.is_valid:
             payload["trace_id"] = trace.format_trace_id(span_context.trace_id)
@@ -112,7 +137,9 @@ class _JSONFormatter(logging.Formatter):
         if request_id is not None:
             payload["request_id"] = request_id
         if record.exc_info is not None:
-            payload["exception"] = self.formatException(record.exc_info)
+            payload["exception"] = redact_text(self.formatException(record.exc_info))
+        elif record.exc_text:
+            payload["exception"] = redact_text(record.exc_text)
         return json.dumps(payload, default=str)
 
 
@@ -143,6 +170,7 @@ def configure_logging() -> None:
     root.setLevel(logging.INFO)
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(_JSONFormatter())
+    handler.addFilter(RedactingFilter())
     setattr(handler, _OWNED, True)
     root.addHandler(handler)
     # uvicorn configures its own plain-text handlers (propagate=False) before importing
@@ -173,5 +201,6 @@ def _configure_otel_logging(root: logging.Logger) -> None:
         set_logger_provider(provider)
         _providers["logs"] = provider
     otel_handler = LoggingHandler(logger_provider=provider)
+    otel_handler.addFilter(RedactingFilter(otel_exception_attributes=True))
     setattr(otel_handler, _OWNED, True)
     root.addHandler(otel_handler)

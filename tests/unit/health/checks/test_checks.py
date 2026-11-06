@@ -1,6 +1,8 @@
 """Unit test: each generic dependency check's success/failure paths, services faked out."""
 
+import asyncio
 import logging
+import threading
 from collections.abc import Callable
 from typing import Any, cast
 
@@ -15,6 +17,7 @@ from craftainer_observability.health.checks.http import HTTPCheck
 from craftainer_observability.health.checks.postgres import PostgresCheck
 from craftainer_observability.health.checks.redis import RedisCheck
 from craftainer_observability.health.checks.s3 import S3Check
+from craftainer_observability.health.registry import HealthRegistry
 
 
 class _FakeConnection:
@@ -244,3 +247,71 @@ async def test_failed_checks_all_log_redacted(
 def test_http_check_exposes_its_timeout() -> None:
     """HTTPCheck.timeout is public so the registry honours it instead of its default."""
     assert HTTPCheck("http://x", timeout=12).timeout == 12
+
+
+class _BlockingS3Client:
+    """A list_buckets that blocks until released, counting calls."""
+
+    def __init__(self) -> None:
+        """Start unreleased."""
+        self.calls = 0
+        self.release = threading.Event()
+
+    def list_buckets(self) -> None:
+        """Block until released."""
+        self.calls += 1
+        self.release.wait(5)
+
+
+async def test_s3_slow_call_is_shared_not_piled_up() -> None:
+    """While one ListBuckets outlives the timeout, later checks wait for it, not start more."""
+    client = _BlockingS3Client()
+    check = S3Check(cast("Any", client))
+    registry = HealthRegistry(default_timeout=0.05)
+    registry.register(check)
+    for _ in range(5):
+        (result,) = await registry.run_all()
+        assert result.healthy is False
+    assert client.calls == 1
+    client.release.set()
+    (result,) = await registry.run_all()
+    assert result.healthy is True
+    assert client.calls == 1
+    await check.check()  # the finished call is replaced by a fresh one
+    assert client.calls == 2
+    check.close()
+
+
+async def test_s3_failure_of_an_abandoned_call_is_still_retrieved() -> None:
+    """A call that fails after every waiter gave up leaves no unretrieved exception."""
+    started = threading.Event()
+    release = threading.Event()
+
+    class _Failing:
+        def list_buckets(self) -> None:
+            started.set()
+            release.wait(5)
+            raise ClientError({"Error": {"Code": "500", "Message": "boom"}}, "ListBuckets")
+
+    check = S3Check(cast("Any", _Failing()))
+    waiter = asyncio.create_task(check.check())
+    await asyncio.to_thread(started.wait, 5)
+    waiter.cancel()
+    release.set()
+    inflight = check._inflight
+    assert inflight is not None
+    await asyncio.wait([inflight])
+    await asyncio.sleep(0)
+    assert inflight.done()
+    check.close()
+
+
+def test_s3_call_from_another_event_loop_starts_its_own() -> None:
+    """An in-flight future bound to a different loop is not reused."""
+    client = _BlockingS3Client()
+    client.release.set()
+    check = S3Check(cast("Any", client))
+    assert asyncio.run(check.check()).healthy is True
+    assert asyncio.run(check.check()).healthy is True
+    assert client.calls == 2
+    check.close()

@@ -557,3 +557,145 @@ def test_reset_after_fork_hook_resets_client_and_tolerates_none(
     monkeypatch.setattr(client_mod, "_client", None)
     client_mod._reset_after_fork()
     c.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("ANALYTICS_CONSENT", "optin"),
+        ("ANALYTICS_CONSENT", "opt_in"),
+        ("ANALYTICS_ENABLED", "disabled"),
+        ("ANALYTICS_ENABLED", "n"),
+        ("ANALYTICS_ENDPOINT", "htps://umami.example"),
+        ("ANALYTICS_ENDPOINT", "umami.example:3000"),
+        ("ANALYTICS_ENDPOINT", "https://user:pw@umami.example"),
+        ("ANALYTICS_ENDPOINT", "https://user@umami.example"),
+        ("ANALYTICS_ENDPOINT", "http://[bad"),
+    ],
+)
+def test_config_fails_closed_on_unknown_values(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    """An unknown consent or kill-switch value, or a bad endpoint, is a startup error."""
+    monkeypatch.setenv(name, value)
+    with pytest.raises(analytics.AnalyticsConfigError) as raised:
+        AnalyticsConfig.from_env()
+    assert name in str(raised.value)
+    assert "pw" not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"), [("1", True), ("YES", True), ("on", True), ("off", False), ("0", False)]
+)
+def test_enabled_accepts_only_known_booleans(
+    monkeypatch: pytest.MonkeyPatch, value: str, expected: bool
+) -> None:
+    """The known spellings parse; the kill switch is not left on by a guess."""
+    monkeypatch.setenv("ANALYTICS_ENABLED", value)
+    assert AnalyticsConfig.from_env().enabled is expected
+
+
+def test_unknown_respect_gpc_stays_safe_and_warns(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An unparseable ANALYTICS_RESPECT_GPC keeps the safe default (respect) with a warning."""
+    monkeypatch.setenv("ANALYTICS_RESPECT_GPC", "maybe")
+    with caplog.at_level(logging.WARNING):
+        assert AnalyticsConfig.from_env().respect_gpc is True
+    assert "ANALYTICS_RESPECT_GPC" in caplog.text
+
+
+def test_plain_http_endpoint_warns_unless_loopback(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """http to a remote host warns; http to loopback and https do not."""
+    with caplog.at_level(logging.WARNING):
+        for endpoint in ("http://localhost:3000", "http://127.0.0.1", "https://u.example"):
+            monkeypatch.setenv("ANALYTICS_ENDPOINT", endpoint)
+            assert AnalyticsConfig.from_env().endpoint == endpoint
+        assert not caplog.records
+        monkeypatch.setenv("ANALYTICS_ENDPOINT", "http://umami.internal:3000")
+        AnalyticsConfig.from_env()
+    assert "umami.internal" in caplog.text
+
+
+def test_track_with_invalid_config_drops_and_logs_error_once(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Fail closed: nothing is tracked, and the cause is logged at ERROR once, not at DEBUG."""
+    monkeypatch.setattr(client_mod, "_config_error_logged", False)
+    monkeypatch.setenv("ANALYTICS_BACKEND", "log")
+    monkeypatch.setenv("ANALYTICS_CONSENT", "optin")
+    with caplog.at_level(logging.INFO):
+        analytics.track("a.b")
+        analytics.track("a.b")
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(errors) == 1
+    assert "ANALYTICS_CONSENT" in errors[0].getMessage()
+    assert not any(r.name.endswith("analytics.events") for r in caplog.records)
+
+
+def test_delivery_failure_warns_once_per_outage(caplog: pytest.LogCaptureFixture) -> None:
+    """The first failed flush warns with the dropped count; repeats are quiet until recovery."""
+    state = {"fail": True}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """Fail or succeed as scripted."""
+        if state["fail"]:
+            raise httpx.ConnectError("down", request=request)
+        return httpx.Response(200, json={"errors": 0})
+
+    c = analytics.AnalyticsClient(
+        AnalyticsConfig(backend="umami", endpoint="http://u", site_id="s"),
+        transport=httpx.MockTransport(handler),
+        flush_interval=3600,
+    )
+    with caplog.at_level(logging.DEBUG, logger=client_mod.logger.name):
+        for _ in range(2):
+            c.track("a.b")
+            c.flush()
+        warned = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warned) == 1
+        assert "ConnectError" in warned[0].getMessage()
+        assert "dropping 1 events" in warned[0].getMessage()
+        state["fail"] = False
+        c.track("a.b")
+        c.flush()
+        state["fail"] = True
+        c.track("a.b")
+        c.flush()
+    assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 2
+    c.shutdown()
+
+
+def test_from_headers_reads_gpc_dnt_and_consent() -> None:
+    """Sec-GPC and DNT set gpc, Analytics-Consent sets consent; names are case-insensitive."""
+    assert analytics.from_headers({}) == analytics.RequestContext()
+    assert analytics.from_headers({"sec-gpc": "1"}) == analytics.RequestContext(gpc=True)
+    assert analytics.from_headers({"DNT": " 1 "}) == analytics.RequestContext(gpc=True)
+    assert analytics.from_headers({"analytics-consent": "1"}) == analytics.RequestContext(
+        consent=True
+    )
+    both = analytics.from_headers({"Sec-GPC": "1", "Analytics-Consent": "1"})
+    assert both == analytics.RequestContext(gpc=True, consent=True)
+    # anything but "1" is no signal
+    assert analytics.from_headers({"Sec-GPC": "0", "DNT": "0", "Analytics-Consent": "yes"}) == (
+        analytics.RequestContext()
+    )
+
+
+def test_from_headers_drives_request_context(caplog: pytest.LogCaptureFixture) -> None:
+    """The parsed context blocks under GPC and gates opt-in on consent."""
+    c = analytics.AnalyticsClient(AnalyticsConfig(backend="log", consent="opt-in"))
+    ctx = analytics.from_headers({"Analytics-Consent": "1"})
+    with caplog.at_level(logging.INFO, logger="craftainer_observability.analytics.events"):
+        with analytics.request_context(gpc=ctx.gpc, consent=ctx.consent):
+            c.track("a.b")
+        with analytics.request_context(**vars_of(analytics.from_headers({}))):
+            c.track("a.b")
+    assert len(caplog.records) == 1
+
+
+def vars_of(ctx: analytics.RequestContext) -> dict[str, bool]:
+    """The keyword arguments `request_context` takes for `ctx`."""
+    return {"gpc": ctx.gpc, "consent": ctx.consent}
