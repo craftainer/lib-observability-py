@@ -5,7 +5,7 @@ The unit tests fake the client to exercise the failure branch.
 
 import asyncio
 import logging
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
 from botocore.exceptions import BotoCoreError, ClientError
@@ -39,18 +39,27 @@ class S3Check:
         self.name = name
         self._client = client
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="s3-health")
-        self._inflight: asyncio.Future[object] | None = None
+        self._inflight: Future[object] | None = None
+        self._closed = False
 
     def close(self) -> None:
-        """Release the executor thread (call on shutdown; a running call is not interrupted)."""
-        self._executor.shutdown(wait=False)
+        """Release the executor; idempotent. Later checks report unhealthy.
 
-    def _call(self) -> asyncio.Future[object]:
-        """The running `ListBuckets` call on this loop, started when there is none."""
-        loop = asyncio.get_running_loop()
+        A call already running is not interrupted (its thread is joined at interpreter
+        exit); queued work is dropped.
+        """
+        self._closed = True
+        self._executor.shutdown(wait=False, cancel_futures=True)
+
+    def _call(self) -> Future[object]:
+        """The running `ListBuckets` call, started when there is none.
+
+        A `concurrent.futures.Future`, so it does not belong to any one event loop: each
+        caller wraps it for its own loop, and a loop that has gone away cannot break it.
+        """
         inflight = self._inflight
-        if inflight is None or inflight.done() or inflight.get_loop() is not loop:
-            inflight = loop.run_in_executor(self._executor, self._client.list_buckets)
+        if inflight is None or inflight.done():
+            inflight = self._executor.submit(self._client.list_buckets)
             # Retrieve the outcome even if every waiter timed out, so it is never "unretrieved".
             inflight.add_done_callback(lambda fut: fut.cancelled() or fut.exception())
             self._inflight = inflight
@@ -58,8 +67,14 @@ class S3Check:
 
     async def check(self) -> HealthCheckResult:
         """Call ListBuckets in a thread and report whether it succeeded."""
+        if self._closed:
+            return HealthCheckResult(self.name, healthy=False, detail=UNHEALTHY_DETAIL)
         try:
-            await asyncio.shield(self._call())
+            wrapped = asyncio.wrap_future(self._call())
+            # Retrieve the outcome even if this waiter is cancelled, so it is never logged
+            # as "exception in shielded future".
+            wrapped.add_done_callback(lambda fut: fut.cancelled() or fut.exception())
+            await asyncio.shield(wrapped)
         except (BotoCoreError, ClientError) as exc:
             log_failure(logger, "S3 health check failed", exc)
             return HealthCheckResult(self.name, healthy=False, detail=UNHEALTHY_DETAIL)

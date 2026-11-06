@@ -170,16 +170,29 @@ async def test_ready_ttl_zero_disables_the_cache() -> None:
     assert check.runs == 2
 
 
-async def test_ready_cache_is_per_registry() -> None:
-    """A different registry from the dependency is not served the previous one's result."""
-    first, second = _CountingCheck(), _CountingCheck()
-    registries = [HealthRegistry(), HealthRegistry()]
-    registries[0].register(first)
-    registries[1].register(second)
-    current = [registries[0]]
+async def test_ready_cache_belongs_to_the_router_not_the_registry_instance() -> None:
+    """A provider that builds a registry per request still gets cache hits."""
+    check = _CountingCheck()
+
+    def fresh() -> HealthRegistry:
+        registry = HealthRegistry()
+        registry.register(check)
+        return registry
+
     app = FastAPI()
-    app.include_router(build_health_router(lambda: current[0]))
+    app.include_router(build_health_router(fresh))
     await _get(app)
-    current[0] = registries[1]
     await _get(app)
-    assert (first.runs, second.runs) == (1, 1)
+    assert check.runs == 1
+
+
+def test_ready_cache_serves_successive_event_loops() -> None:
+    """The router lock is per loop, so a second loop under contention does not raise."""
+    check = _CountingCheck()
+    app, _ = _ready_app(check, ready_cache_ttl=0.001)
+
+    async def burst() -> list[int]:
+        return list(await asyncio.gather(*(_get(app) for _ in range(5))))
+
+    assert asyncio.run(burst()) == [200] * 5
+    assert asyncio.run(burst()) == [200] * 5

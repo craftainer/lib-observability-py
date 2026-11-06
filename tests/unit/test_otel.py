@@ -302,7 +302,7 @@ def test_exporter_redacts_attributes_events_links_and_status() -> None:
     assert done.attributes["db.statement"] == "select 1 where password = [REDACTED]"
     assert "url.query" not in done.attributes
     assert done.attributes["url.full"] == "https://h/x"
-    assert done.attributes["tags"] == ["a", "token=[REDACTED]", 3]
+    assert done.attributes["tags"] == ("a", "token=[REDACTED]", 3)
     assert done.attributes["retries"] == 3
     assert done.attributes["blob"] == b"raw"
     assert done.events[0].attributes == {"exception.message": "boom password=[REDACTED]"}
@@ -346,3 +346,42 @@ def test_configure_telemetry_wraps_the_otlp_span_exporter(monkeypatch: pytest.Mo
     state = otel._state
     assert state is not None
     state.meter_provider.shutdown()
+
+
+def test_strip_query_survives_an_unparseable_target() -> None:
+    """A crafted target that urlsplit rejects is still cut at the query, never raised."""
+    assert otel._strip_query("//[/x?q=1") == "//[/x"
+    assert otel._strip_query("http://[::1/?a#f") == "http://[::1/"
+
+
+def test_exporter_redacts_names_and_keeps_dropped_counts() -> None:
+    """Span and event names are scrubbed; the dropped counts reach the exporter."""
+    provider, capture = _redacting_provider()
+    tracer = provider.get_tracer("t")
+    with tracer.start_as_current_span("GET /login password=hunter2") as span:
+        span.add_event("retry token=abc", {"k": "v"})
+    (done,) = capture.spans
+    assert done.name == "GET /login password=[REDACTED]"
+    assert done.events[0].name == "retry token=[REDACTED]"
+    source = otel.ReadableSpan(
+        "n",
+        attributes=otel.BoundedAttributes(1, {"a": 1, "b": 2}),
+        events=otel.BoundedList.from_seq(1, [otel.Event("e", {"x": 1})]),
+    )
+    copy = otel._redact_span(source)
+    assert (copy.dropped_attributes, len(copy.attributes or {})) == (1, 1)
+
+
+def test_unredactable_span_is_exported_without_its_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If scrubbing a span raises, the span goes out empty, not raw."""
+    def boom(_value: str) -> str:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(otel, "redact_text", boom)
+    source = otel.ReadableSpan("secret=1", attributes={"a": "password=x"})
+    copy = otel._redact_span(source)
+    assert copy.name == otel.REDACTED
+    assert not copy.attributes
+    assert not copy.events

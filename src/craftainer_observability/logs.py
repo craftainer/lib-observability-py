@@ -30,7 +30,7 @@ from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
 
 from craftainer_observability.middleware import get_request_id
-from craftainer_observability.redaction import redact_text, redact_value
+from craftainer_observability.redaction import REDACTED, redact_text, redact_value
 
 _RESERVED_LOG_RECORD_ATTRS = frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__dict__)
 
@@ -88,7 +88,30 @@ class RedactingFilter(logging.Filter):
         self._otel = otel_exception_attributes
 
     def filter(self, record: logging.LogRecord) -> bool | logging.LogRecord:
-        """Return a redacted copy of `record`."""
+        """Return a redacted copy of `record`.
+
+        Filters run outside `Handler.emit`'s error handling, so a failure here (a bad
+        `%`-format, an extra whose `str()` raises) must not reach the caller of `logger.*`:
+        the record is then replaced by one with everything hidden.
+        """
+        try:
+            return self._redacted(record)
+        except Exception:  # noqa: BLE001 -- fail closed, whatever went wrong
+            return self._blank(record)
+
+    @staticmethod
+    def _blank(record: logging.LogRecord) -> logging.LogRecord:
+        """A copy of `record` with the message, extras and exception all hidden."""
+        clean = copy.copy(record)
+        clean.msg = REDACTED
+        clean.args = None
+        for key in record.__dict__.keys() - _RESERVED_LOG_RECORD_ATTRS:
+            clean.__dict__[key] = REDACTED
+        clean.exc_info = clean.exc_text = clean.stack_info = None
+        return clean
+
+    def _redacted(self, record: logging.LogRecord) -> logging.LogRecord:
+        """The redacted copy; may raise."""
         clean = copy.copy(record)
         clean.msg = redact_text(record.getMessage())
         clean.args = None
@@ -115,8 +138,23 @@ def _format_exception(exc_info: Any) -> str:  # noqa: ANN401
     return logging.Formatter().formatException(exc_info)
 
 
+def _identity(_key: str, value: object) -> object:
+    """`value` unchanged (the formatter's no-op when the filter already redacted)."""
+    return value
+
+
 class _JSONFormatter(logging.Formatter):
-    """Renders one JSON object per line: timestamp, level, logger, message, extras."""
+    """Renders one JSON object per line: timestamp, level, logger, message, extras.
+
+    It redacts what it renders unless `redact=False`, which `configure_logging` passes
+    because `RedactingFilter` on the same handler has already done it (once is enough).
+    """
+
+    def __init__(self, *, redact: bool = True) -> None:
+        """Build the formatter; `redact=False` trusts an upstream `RedactingFilter`."""
+        super().__init__()
+        self._text = redact_text if redact else str
+        self._value = redact_value if redact else _identity
 
     def format(self, record: logging.LogRecord) -> str:
         """Serialize the record as a single-line JSON object."""
@@ -124,11 +162,11 @@ class _JSONFormatter(logging.Formatter):
             "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
-            "message": redact_text(record.getMessage()),
+            "message": self._text(record.getMessage()),
         }
         for key, value in record.__dict__.items():
             if key not in _RESERVED_LOG_RECORD_ATTRS:
-                payload[key] = redact_value(key, value)
+                payload[key] = self._value(key, value)
         span_context = trace.get_current_span().get_span_context()
         if span_context.is_valid:
             payload["trace_id"] = trace.format_trace_id(span_context.trace_id)
@@ -137,9 +175,9 @@ class _JSONFormatter(logging.Formatter):
         if request_id is not None:
             payload["request_id"] = request_id
         if record.exc_info is not None:
-            payload["exception"] = redact_text(self.formatException(record.exc_info))
+            payload["exception"] = self._text(self.formatException(record.exc_info))
         elif record.exc_text:
-            payload["exception"] = redact_text(record.exc_text)
+            payload["exception"] = self._text(record.exc_text)
         return json.dumps(payload, default=str)
 
 
@@ -169,7 +207,7 @@ def configure_logging() -> None:
     _drop_owned_handlers(root)
     root.setLevel(logging.INFO)
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(_JSONFormatter())
+    handler.setFormatter(_JSONFormatter(redact=False))  # the filter below redacts
     handler.addFilter(RedactingFilter())
     setattr(handler, _OWNED, True)
     root.addHandler(handler)

@@ -246,3 +246,26 @@ def test_filter_passes_a_plain_record_through_redacted() -> None:
     assert clean.getMessage() == "token=[REDACTED]"
     assert clean.exc_text is None
     assert clean.args is None
+
+
+def test_filter_never_raises_and_hides_everything_when_redaction_fails() -> None:
+    """A bad %-format must not escape `logger.info`; the record is replaced by a blank one."""
+    record = logging.LogRecord("app.test", logging.INFO, __file__, 1, "n=%d", ("x",), None)
+    record.__dict__["api_note"] = "keep? no"
+    record.stack_info = "password=hunter2"
+    clean = RedactingFilter().filter(record)
+    assert isinstance(clean, logging.LogRecord)
+    assert clean.getMessage() == "[REDACTED]"
+    assert clean.__dict__["api_note"] == "[REDACTED]"
+    assert clean.stack_info is None
+    assert clean.exc_info is None
+
+
+def test_formatter_with_redact_off_trusts_the_filter() -> None:
+    """configure_logging's formatter does not redact twice; the filter has already."""
+    record = logging.LogRecord("app.test", logging.INFO, __file__, 1, "password=hunter2", (), None)
+    assert "hunter2" not in _JSONFormatter().format(record)
+    assert "hunter2" in _JSONFormatter(redact=False).format(record)
+    clean = RedactingFilter().filter(record)
+    assert isinstance(clean, logging.LogRecord)
+    assert "hunter2" not in _JSONFormatter(redact=False).format(clean)

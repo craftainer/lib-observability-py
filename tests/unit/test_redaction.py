@@ -1,5 +1,7 @@
 """Unit test: the shared redaction rule set every sink uses."""
 
+import time
+
 import pytest
 
 from craftainer_observability.redaction import (
@@ -93,3 +95,24 @@ def test_redact_value_walks_containers_to_a_depth_limit() -> None:
     for _ in range(6):
         deep = {"k": deep}
     assert "leaf" not in str(redact_value("data", deep))
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        "://" * 40_000,
+        "token" * 40_000,
+        "eyJ-" * 40_000,
+        "bearer " * 20_000,
+        "authorization" * 10_000,
+        "password=" * 20_000,
+        "a=" * 40_000,
+        "eyJ" + "a" * 100_000,
+        "bearer " + "a" * 100_000,
+    ],
+)
+def test_redact_text_is_not_quadratic_on_hostile_input(hostile: str) -> None:
+    """Long adversarial inputs finish quickly (the userinfo and JWT rules were quadratic)."""
+    started = time.perf_counter()
+    redact_text(hostile)
+    assert time.perf_counter() - started < 2

@@ -300,14 +300,15 @@ async def test_s3_failure_of_an_abandoned_call_is_still_retrieved() -> None:
     release.set()
     inflight = check._inflight
     assert inflight is not None
-    await asyncio.wait([inflight])
+    await asyncio.wait([asyncio.wrap_future(inflight)])
     await asyncio.sleep(0)
     assert inflight.done()
+    assert isinstance(inflight.exception(), ClientError)
     check.close()
 
 
-def test_s3_call_from_another_event_loop_starts_its_own() -> None:
-    """An in-flight future bound to a different loop is not reused."""
+def test_s3_serves_successive_event_loops() -> None:
+    """The in-flight call belongs to no loop, so a closed loop cannot break a later one."""
     client = _BlockingS3Client()
     client.release.set()
     check = S3Check(cast("Any", client))
@@ -315,3 +316,14 @@ def test_s3_call_from_another_event_loop_starts_its_own() -> None:
     assert asyncio.run(check.check()).healthy is True
     assert client.calls == 2
     check.close()
+
+
+def test_s3_close_is_idempotent_and_later_checks_are_unhealthy() -> None:
+    """After close() a probe reports unhealthy instead of raising from the dead executor."""
+    client = _BlockingS3Client()
+    check = S3Check(cast("Any", client))
+    check.close()
+    check.close()
+    result = asyncio.run(check.check())
+    assert result.healthy is False
+    assert client.calls == 0

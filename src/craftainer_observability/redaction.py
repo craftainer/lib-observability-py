@@ -49,25 +49,58 @@ def _key_pattern(entry: str) -> str:
 
 # `scheme://user:pass@host` -> `scheme://[REDACTED]@host`. The userinfo runs to the last
 # `@` before whitespace or a quote (not to the first `/`: a password may contain `/`, `?`
-# or `#`), so a path containing `@` is over-redacted on purpose.
-_USERINFO = re.compile(r"""(://)[^\s"']*@""")
+# or `#`), so a path containing `@` is over-redacted on purpose. Done per whitespace/quote
+# delimited token with `find`, so a long run of `://` costs linear, not quadratic, time.
+_TOKEN = re.compile(r"""[^\s"']+""")
+
+
+def _redact_userinfo(match: re.Match[str]) -> str:
+    """One token with the credentials of its first `://...@` hidden."""
+    token = match.group()
+    start = token.find("://")
+    if start < 0:
+        return token
+    at = token.rfind("@")
+    if at < start + 3:
+        return token
+    return f"{token[: start + 3]}{REDACTED}{token[at:]}"
+
+
+_KEY_TAIL = r"[\w-]{0,128}"
+"""How far past a matched entry a key may run (`password_hash`); bounded for ReDoS."""
+
+# `Authorization: Digest username="bob", response="abc"`: any scheme word, then either
+# `name=value` parameters or one credential. A quoted value is taken whole.
+_AUTH = re.compile(
+    r"(?P<key>(?:proxy[-_]?)?authorization" + _KEY_TAIL + r")"
+    r"""(?P<sep>\\?["']? *[=:] *)"""
+    r"""(?:(?P<q>["'])(?:\\.|(?!(?P=q))[^\\])*(?:(?P=q)|$)"""
+    r"""|(?:[A-Za-z][\w-]*[ ]+)?(?:(?:[\w-]+=(?:"[^"]*"|[^\s,"']*)(?:, *)?)+|[^\s'"]*))""",
+    re.IGNORECASE,
+)
 
 # `password=hunter2`, `token: 'a b'`. Keys match case-insensitively, also as the tail of a
 # longer key (`db_password`, `secret_key`, `session_id`). The value is a quoted string
-# (backslash escapes honoured; unterminated runs to the end) or a run up to whitespace or
-# a quote.
+# (backslash escapes honoured; unterminated runs to the end), the same inside JSON that
+# was escaped once more (`\"hunter2\"`), or a run up to whitespace or a quote.
 _PAIR = re.compile(
-    r"(?P<key>(?:" + "|".join(_key_pattern(entry) for entry in REDACTION_KEYS) + r")[\w-]*)"
-    r"""(?P<sep>["']? *[=:] *)"""
+    r"(?P<key>(?:" + "|".join(_key_pattern(entry) for entry in REDACTION_KEYS) + r")"
+    + _KEY_TAIL
+    + r")"
+    r"""(?P<sep>\\?["']? *[=:] *)"""
     r"""(?:(?:bearer|basic) +)?"""
-    r"""(?:'(?:\\.|[^'\\])*(?:'|$)|"(?:\\.|[^"\\])*(?:"|$)|[^\s'"]*)""",
+    r"""(?:'(?:\\.|[^'\\])*(?:'|$)|"(?:\\.|[^"\\])*(?:"|$)"""
+    r"""|\\"[^"]*(?:"|$)|\\'[^']*(?:'|$)|[^\s'"]*)""",
     re.IGNORECASE | re.DOTALL,
 )
 
 # A bare `Bearer <credential>` and a bare JWT (three base64url parts starting `eyJ`) that
-# no `key=` precedes, e.g. `logger.info("login %s", token)`.
-_BEARER = re.compile(r"\b(bearer) +[A-Za-z0-9._~+/=-]+", re.IGNORECASE)
-_JWT = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*")
+# no `key=` precedes, e.g. `logger.info("login %s", token)`. The JWT parts are bounded and
+# possessive, so `eyJ-eyJ-...` cannot make the scan quadratic.
+_BEARER = re.compile(r"\b(bearer) +[A-Za-z0-9._~+/=-]{1,4096}", re.IGNORECASE)
+_JWT = re.compile(
+    r"\beyJ[A-Za-z0-9_-]{1,4096}+\.[A-Za-z0-9_-]{1,4096}+\.[A-Za-z0-9_-]{0,4096}+"
+)
 
 
 def redact_text(text: str) -> str:
@@ -77,8 +110,10 @@ def redact_text(text: str) -> str:
     (`://`, a `=` or `:`, `bearer`, `eyJ`), so ordinary log lines cost a few `in` checks.
     """
     if "://" in text:
-        text = _USERINFO.sub(rf"\1{REDACTED}@", text)
+        text = _TOKEN.sub(_redact_userinfo, text)
     if "=" in text or ":" in text:
+        if "authorization" in text.lower():
+            text = _AUTH.sub(rf"\g<key>\g<sep>{REDACTED}", text)
         text = _PAIR.sub(rf"\g<key>\g<sep>{REDACTED}", text)
     if "bearer" in text.lower():
         text = _BEARER.sub(rf"\1 {REDACTED}", text)

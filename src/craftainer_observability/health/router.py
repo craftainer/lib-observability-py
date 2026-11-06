@@ -6,6 +6,7 @@ checks it registered) rather than assuming any particular set of external servic
 
 import asyncio
 import os
+import weakref
 from collections.abc import Callable
 from importlib import metadata
 from time import monotonic
@@ -47,24 +48,30 @@ def build_health_router(
 
     `/ready` is unauthenticated and every call would hit every dependency, so its result is
     cached for `ready_cache_ttl` seconds (`0` turns the cache off) and concurrent requests
-    share one run of the checks. Mount the router on an internal port (or a path the edge
+    share one run of the checks. The cache belongs to the router, so `get_registry` is
+    expected to return the application's one registry. Mount the router on an internal port (or a path the edge
     does not route) rather than the public one.
     """
     router = APIRouter(tags=["health"])
-    lock = asyncio.Lock()
-    cached: list[tuple[HealthRegistry, float, list[HealthCheckResult]]] = []
+    # One lock per event loop: an `asyncio.Lock` binds to the loop that first contends it,
+    # and a router can be served from more than one (several test clients, worker threads).
+    locks: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = (
+        weakref.WeakKeyDictionary()
+    )
+    cached: list[tuple[float, list[HealthCheckResult]]] = []
 
     async def run_checks(registry: HealthRegistry) -> list[HealthCheckResult]:
         """The checks' results, from the cache while fresh; one run serves concurrent callers."""
         if ready_cache_ttl <= 0:
             return await registry.run_all()
+        lock = locks.setdefault(asyncio.get_running_loop(), asyncio.Lock())
         async with lock:
             if cached:
-                owner, at, results = cached[0]
-                if owner is registry and monotonic() - at < ready_cache_ttl:
+                at, results = cached[0]
+                if monotonic() - at < ready_cache_ttl:
                     return results
             results = await registry.run_all()
-            cached[:] = [(registry, monotonic(), results)]
+            cached[:] = [(monotonic(), results)]
             return results
 
     @router.get("/live")

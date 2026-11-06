@@ -66,7 +66,7 @@ library only inside its own module. A check's `name` defaults to the service
 | --- | --- | --- | --- |
 | `PostgresCheck` | `checks/postgres.py` | `[sqlalchemy]` | `PostgresCheck(engine)`, an `AsyncEngine`; runs `SELECT 1` |
 | `RedisCheck` | `checks/redis.py` | `[redis]` | `RedisCheck(url)`; PINGs over one client reused by every check (per event loop; `await check.aclose()` on shutdown) |
-| `S3Check` | `checks/s3.py` | `[s3]` | `S3Check(client)`, a boto3 S3 client; calls `ListBuckets` on the check's own single-thread executor; a call that outlives the timeout is awaited by the next check, never duplicated (`close()` on shutdown) |
+| `S3Check` | `checks/s3.py` | `[s3]` | `S3Check(client)`, a boto3 S3 client; calls `ListBuckets` on the check's own single-thread executor; a call that outlives the timeout is awaited by the next check, never duplicated (`close()` on shutdown: idempotent, later checks report unhealthy) |
 | `HTTPCheck` | `checks/http.py` | `[http]` | `HTTPCheck(url, timeout=5)`; GETs the full URL (e.g. an OIDC discovery document) |
 
 Each catches its own client library's errors, logs them, and returns an
@@ -83,8 +83,9 @@ DSN's userinfo or a `password=...` pair does not reach the logs either.
 `session`, `dsn`, `private`, `signature`) is matched as a substring of the lowercased key (`-`
 read as `_`), so `X-Api-Key`, `db_password` and `Set-Cookie` all match; the text rules also hide
 URL userinfo, `key=value` pairs, a bare `Bearer ...` and a bare JWT. `lib-observability-rs`
-mirrors the list. It is applied by `logs.RedactingFilter` (stdout and OTLP log handlers),
-the JSON formatter, `otel.RedactingSpanExporter` and `health.redact`.
+mirrors the list. It is applied by `logs.RedactingFilter` (stdout and OTLP log handlers; it never
+raises into the caller, a failure blanks the record), the JSON formatter (once per record: skipped when the
+handler's filter has run), `otel.RedactingSpanExporter` and `health.redact`.
 
 ## logs
 

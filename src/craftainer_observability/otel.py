@@ -17,6 +17,7 @@ The SQLAlchemy instrumentation already emits connection-pool usage
 This module imports nothing from `app`.
 """
 
+import logging
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import FastAPI
 from opentelemetry import metrics, trace
+from opentelemetry.attributes import BoundedAttributes
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
@@ -33,12 +35,15 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import MetricReader, PeriodicExportingMetricReader
 from opentelemetry.sdk.trace import Event, ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, SpanExportResult
+from opentelemetry.sdk.util import BoundedList
 from opentelemetry.trace import Link, Status
 from opentelemetry.util.types import Attributes, AttributeValue
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from craftainer_observability.logs import exporter_enabled, otlp_enabled, shared_resource
 from craftainer_observability.redaction import REDACTED, is_sensitive_key, redact_text
+
+logger = logging.getLogger(__name__)
 
 # Probes would otherwise flood traces; used only when the standard variable is unset.
 DEFAULT_EXCLUDED_URLS = "/health/.*"
@@ -54,8 +59,11 @@ def _strip_query(value: str) -> str:
     """`value` (a URL or a request target) without its query string and fragment."""
     if "?" not in value and "#" not in value:
         return value
-    parts = urlsplit(value)
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+    try:
+        parts = urlsplit(value)
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+    except ValueError:  # e.g. an unbalanced `[` from a crafted request target
+        return value.split("?", 1)[0].split("#", 1)[0]
 
 
 def _redact_attributes(attributes: Attributes) -> Attributes:
@@ -82,26 +90,58 @@ def _redact_attributes(attributes: Attributes) -> Attributes:
     return clean
 
 
+def _bounded(attributes: Attributes, dropped: int) -> Attributes:
+    """`attributes` as a `BoundedAttributes` that keeps the original dropped count."""
+    bounded = BoundedAttributes(None, attributes, immutable=True)
+    bounded.dropped = dropped
+    return bounded
+
+
 def _redact_span(span: ReadableSpan) -> ReadableSpan:
-    """A copy of `span` safe to export: attributes, events, links and status redacted."""
-    events = [
-        Event(
-            event.name,
-            _redact_attributes(event.attributes),
-            event.timestamp,
+    """A copy of `span` safe to export: name, attributes, events, links and status redacted.
+
+    The dropped-attribute, -event and -link counts are carried over. A span that cannot be
+    redacted is exported with its name, attributes, events and links removed, never as-is.
+    """
+    try:
+        events = BoundedList.from_seq(
+            None,
+            [
+                Event(
+                    redact_text(event.name),
+                    _bounded(_redact_attributes(event.attributes), event.dropped_attributes),
+                    event.timestamp,
+                )
+                for event in span.events
+            ],
         )
-        for event in span.events
-    ]
-    links = [Link(link.context, _redact_attributes(link.attributes)) for link in span.links]
-    status = span.status
-    if status.description:
-        status = Status(status.status_code, redact_text(status.description))
+        events.dropped = span.dropped_events
+        links = BoundedList.from_seq(
+            None,
+            [
+                Link(
+                    link.context,
+                    _bounded(_redact_attributes(link.attributes), link.dropped_attributes),
+                )
+                for link in span.links
+            ],
+        )
+        links.dropped = span.dropped_links
+        status = span.status
+        if status.description:
+            status = Status(status.status_code, redact_text(status.description))
+        name = redact_text(span.name)
+        attributes = _bounded(_redact_attributes(span.attributes), span.dropped_attributes)
+    except Exception:  # fail closed: a span we cannot scrub must not go out as it is
+        logger.exception("Span redaction failed; exporting the span without its content")
+        name, attributes, events, links = REDACTED, None, [], []
+        status = Status(span.status.status_code)
     return ReadableSpan(
-        name=span.name,
+        name=name,
         context=span.context,
         parent=span.parent,
         resource=span.resource,
-        attributes=_redact_attributes(span.attributes),
+        attributes=attributes,
         events=events,
         links=links,
         kind=span.kind,

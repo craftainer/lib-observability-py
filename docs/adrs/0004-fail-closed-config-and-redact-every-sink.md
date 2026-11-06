@@ -42,14 +42,24 @@ The OWASP review of 2026-11-04 (OW-lib-observability-py) found, in this library 
 - Redaction is record-level. `logs.RedactingFilter` sits on both the stdout and the OTLP
   handler and returns a redacted copy (message with its arguments applied, `extra`
   fields, stack info, the traceback and the OTel `exception.*` attributes), leaving the
-  shared record, and a host's own handlers, untouched. `otel.RedactingSpanExporter` wraps
-  the OTLP span exporter: attribute keys and values, exception events, links and the
-  status description are redacted, and the query string is cut from `http.url`,
+  shared record, and a host's own handlers, untouched. It never raises into the caller of
+  `logger.*`: if redacting a record fails, the record is replaced by a blank one. The stdout
+  JSON formatter does not redact a second time (`_JSONFormatter(redact=False)`), because the
+  filter on the same handler has; used alone it still redacts. `otel.RedactingSpanExporter` wraps
+  the OTLP span exporter: span and event names, attribute keys and values, exception events,
+  links and the status description are redacted (the dropped counts are kept; a span that
+  cannot be redacted is exported empty), and the query string is cut from `http.url`,
   `url.full`, `http.target` and `url.path`; `url.query` is dropped.
 - `/ready` caches its result for `ready_cache_ttl` seconds (default 1, `0` disables) and
-  concurrent requests share one run of the checks. `S3Check` runs `ListBuckets` on its
-  own single-thread executor and keeps one call in flight: a later check awaits that call
-  instead of starting another. The router belongs on an internal port.
+  concurrent requests share one run of the checks; the cache and a per-event-loop lock belong
+  to the router, so `get_registry` must return the application's one registry. `S3Check`
+  runs `ListBuckets` on its own single-thread executor and keeps one loop-independent call
+  in flight: a later check awaits that call instead of starting another. `close()` is
+  idempotent and later checks report unhealthy.
+- The text rules are linear on hostile input (userinfo is scanned per token; key tails and
+  JWT parts are length-bounded). `Authorization: <scheme> <credential>` and Digest-style
+  parameters are hidden whole. The `token` entry also hides counters such as
+  `gen_ai.usage.input_tokens`; that over-redaction is deliberate and shared with the Rust lib. The router belongs on an internal port.
 - `analytics.from_headers(headers)` returns the `RequestContext` for `Sec-GPC: 1` or
   `DNT: 1` (`gpc`) and `Analytics-Consent: 1` (`consent`). Only the BFF may set
   `Analytics-Consent`.
