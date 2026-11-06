@@ -33,6 +33,13 @@ from craftainer_observability.health.redact import redact
         ("password=a;b,c)d&e done", "password=[REDACTED] done"),
         (r"token='it\'s secret' x", "token=[REDACTED] x"),
         ("Authorization: Bearer eyJabc.def x", "Authorization: [REDACTED] x"),
+        ("Authorization: Token abc123", "Authorization: [REDACTED]"),
+        (
+            'Proxy-Authorization: Digest username="bob", response="abc" done',
+            "Proxy-Authorization: [REDACTED] done",
+        ),
+        ('{"authorization": "ApiKey k1", "n": 1}', '{"authorization": [REDACTED] "n": 1}'),
+        (r'{\"password\": \"hunter2\", "n": 1}', r'{\"password\": [REDACTED], "n": 1}'),
         ("password='oops", "password=[REDACTED]"),
         (
             '{"password": "x", "private_key": "k"}',

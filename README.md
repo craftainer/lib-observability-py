@@ -52,13 +52,14 @@ hence the `<2.1` bound.
 
 | Module | Provides |
 | --- | --- |
-| `health` | `HealthCheck`, `HealthCheckResult`, `HealthRegistry`, `build_health_router(get_registry, include_info=False, info_package=None)` |
+| `health` | `HealthCheck`, `HealthCheckResult`, `HealthRegistry`, `build_health_router(get_registry, include_info=False, info_package=None, ready_cache_ttl=1.0)` |
 | `health.checks` | `PostgresCheck`, `RedisCheck`, `S3Check`, `HTTPCheck` (one module each) |
-| `logs` | `configure_logging()`, `shared_resource()` |
-| `otel` | `configure_telemetry()`, `instrument_app(app)`, `instrument_engine(engine)` |
+| `logs` | `configure_logging()`, `shared_resource()`, `RedactingFilter` |
+| `otel` | `configure_telemetry()`, `instrument_app(app)`, `instrument_engine(engine)`, `RedactingSpanExporter` |
+| `redaction` | `REDACTION_KEYS`, `redact_text()`, `redact_value()`, `is_sensitive_key()`: the one rule set every sink uses ([ADR 0004](docs/adrs/0004-fail-closed-config-and-redact-every-sink.md)) |
 | `middleware` | `RequestIDMiddleware`, `get_request_id()` |
 | `profiling` | `install_profiling(app, *, enabled, production, query_param="profile")` |
-| `analytics` | `track(name, props=None, *, url=None)`, `request_context(*, gpc, consent)`, `shutdown()` (needs `[analytics]`; see [ADR 0003](docs/adrs/0003-add-vendor-neutral-analytics-extra.md) and `src/craftainer_observability/analytics/README.md`) |
+| `analytics` | `track(name, props=None, *, url=None)`, `request_context(*, gpc, consent)`, `from_headers(headers)`, `AnalyticsConfigError`, `shutdown()` (needs `[analytics]`; see [ADR 0003](docs/adrs/0003-add-vendor-neutral-analytics-extra.md), [ADR 0004](docs/adrs/0004-fail-closed-config-and-redact-every-sink.md) and `src/craftainer_observability/analytics/README.md`) |
 
 The details, environment variables and conventions are in
 [`src/craftainer_observability/README.md`](src/craftainer_observability/README.md).

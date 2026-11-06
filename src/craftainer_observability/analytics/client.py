@@ -20,7 +20,7 @@ from craftainer_observability.analytics.adapters import (
     OtelAdapter,
     UmamiAdapter,
 )
-from craftainer_observability.analytics.config import AnalyticsConfig
+from craftainer_observability.analytics.config import AnalyticsConfig, AnalyticsConfigError
 from craftainer_observability.analytics.context import get_request_context
 from craftainer_observability.analytics.validate import clean_props, clean_url, valid_name
 
@@ -52,6 +52,7 @@ class AnalyticsClient:
         self._drain_lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._delivery_failing = False
         self._start_lock = threading.Lock()
         self._adapter = self._build_adapter(transport)
         self._queued = isinstance(self._adapter, UmamiAdapter)
@@ -153,8 +154,18 @@ class AnalyticsClient:
                 try:
                     self._adapter.send(events[start : start + BATCH_SIZE])
                 except Exception as exc:
-                    logger.debug("analytics delivery failed: %s", type(exc).__name__)
+                    # Warn on the first failure of a run, then stay quiet until a delivery
+                    # succeeds again, so an outage is visible but does not flood the logs.
+                    level = logging.DEBUG if self._delivery_failing else logging.WARNING
+                    self._delivery_failing = True
+                    logger.log(
+                        level,
+                        "analytics delivery failed (%s); dropping %d events",
+                        type(exc).__name__,
+                        len(events) - start,
+                    )
                     break  # backend unreachable: drop the rest rather than wait out every timeout
+                self._delivery_failing = False
 
     def shutdown(self) -> None:
         """Stop the flush thread after a final flush and close the HTTP client."""
@@ -170,6 +181,7 @@ class AnalyticsClient:
 _client: AnalyticsClient | None = None
 _client_lock = threading.Lock()
 _atexit_registered = False
+_config_error_logged = False
 
 
 def get_client() -> AnalyticsClient:
@@ -196,9 +208,18 @@ os.register_at_fork(after_in_child=_reset_after_fork)
 
 
 def track(name: str, props: Mapping[str, Any] | None = None, *, url: str | None = None) -> None:
-    """Record an analytics event (contract I3). Never raises, never blocks the caller."""
+    """Record an analytics event (contract I3). Never raises, never blocks the caller.
+
+    With an invalid `ANALYTICS_*` configuration (`AnalyticsConfigError`) nothing is tracked
+    (fail closed) and the error is logged at ERROR once per process.
+    """
+    global _config_error_logged  # noqa: PLW0603
     try:
         get_client().track(name, props, url=url)
+    except AnalyticsConfigError as exc:
+        if not _config_error_logged:
+            _config_error_logged = True
+            logger.error("analytics disabled by invalid configuration: %s", exc)
     except Exception:
         logger.debug("analytics track failed", exc_info=True)
 

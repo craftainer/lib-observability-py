@@ -4,12 +4,15 @@ Fully generic -- no app.main, no concrete check, nothing beyond
 craftainer_observability.health itself and FastAPI.
 """
 
+import asyncio
 from importlib import metadata
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from craftainer_observability.health import router as router_mod
 from craftainer_observability.health.base import HealthCheckResult
 from craftainer_observability.health.registry import HealthRegistry
 from craftainer_observability.health.router import build_health_router
@@ -98,3 +101,98 @@ def test_info_version_is_null_when_unknown(
     monkeypatch.delenv("APP_VERSION", raising=False)
     response = _info_client(include_info=True, info_package=package).get("/info")
     assert response.json()["version"] is None
+
+
+class _CountingCheck:
+    """A check that counts runs and can be held open."""
+
+    name = "counting"
+
+    def __init__(self) -> None:
+        """Start at zero runs, not held."""
+        self.runs = 0
+        self.gate: asyncio.Event | None = None
+
+    async def check(self) -> HealthCheckResult:
+        """Count, optionally wait for the gate, report healthy."""
+        self.runs += 1
+        if self.gate is not None:
+            await self.gate.wait()
+        return HealthCheckResult(self.name, healthy=True)
+
+
+def _ready_app(
+    check: _CountingCheck, ready_cache_ttl: float = 1.0
+) -> tuple[FastAPI, HealthRegistry]:
+    registry = HealthRegistry()
+    registry.register(check)
+    app = FastAPI()
+    app.include_router(build_health_router(lambda: registry, ready_cache_ttl=ready_cache_ttl))
+    return app, registry
+
+
+async def _get(app: FastAPI, path: str = "/ready") -> int:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        return (await c.get(path)).status_code
+
+
+async def test_ready_result_is_cached_for_the_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Repeated /ready calls inside the TTL run the checks once; after it, again."""
+    now = [100.0]
+    monkeypatch.setattr(router_mod, "monotonic", lambda: now[0])
+    check = _CountingCheck()
+    app, _ = _ready_app(check, ready_cache_ttl=2.0)
+    assert [await _get(app) for _ in range(3)] == [200, 200, 200]
+    assert check.runs == 1
+    now[0] += 2.5
+    assert await _get(app) == 200
+    assert check.runs == 2
+
+
+async def test_concurrent_ready_calls_share_one_run() -> None:
+    """A flood of simultaneous /ready requests runs each check once."""
+    check = _CountingCheck()
+    check.gate = asyncio.Event()
+    app, _ = _ready_app(check)
+    tasks = [asyncio.create_task(_get(app)) for _ in range(10)]
+    await asyncio.sleep(0.05)
+    check.gate.set()
+    assert await asyncio.gather(*tasks) == [200] * 10
+    assert check.runs == 1
+
+
+async def test_ready_ttl_zero_disables_the_cache() -> None:
+    """ready_cache_ttl=0 runs the checks on every request."""
+    check = _CountingCheck()
+    app, _ = _ready_app(check, ready_cache_ttl=0)
+    await _get(app)
+    await _get(app)
+    assert check.runs == 2
+
+
+async def test_ready_cache_belongs_to_the_router_not_the_registry_instance() -> None:
+    """A provider that builds a registry per request still gets cache hits."""
+    check = _CountingCheck()
+
+    def fresh() -> HealthRegistry:
+        registry = HealthRegistry()
+        registry.register(check)
+        return registry
+
+    app = FastAPI()
+    app.include_router(build_health_router(fresh))
+    await _get(app)
+    await _get(app)
+    assert check.runs == 1
+
+
+def test_ready_cache_serves_successive_event_loops() -> None:
+    """The router lock is per loop, so a second loop under contention does not raise."""
+    check = _CountingCheck()
+    app, _ = _ready_app(check, ready_cache_ttl=0.001)
+
+    async def burst() -> list[int]:
+        return list(await asyncio.gather(*(_get(app) for _ in range(5))))
+
+    assert asyncio.run(burst()) == [200] * 5
+    assert asyncio.run(burst()) == [200] * 5
