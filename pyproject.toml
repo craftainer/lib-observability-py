@@ -37,18 +37,18 @@ analytics = ["httpx>=0.28.1,<1"]
 [dependency-groups]
 # Installed by a plain `uv sync` (uv's default group).
 dev = [
-    "ruff==0.16.8",
-    "mypy==2.3.1",
-    "pytest==9.1.1",
-    "pytest-asyncio==1.4.0",
+    "ruff==0.17.3",
+    "mypy==2.4.1",
+    "pytest==9.2.0",
+    "pytest-asyncio==1.4.1.post1",
     "pytest-cov==7.1.0",
-    "pytest-benchmark==5.3.0",
-    "pytest-codspeed==5.0.3",
+    "pytest-benchmark==5.3.1",
+    "pytest-codspeed==5.0.4",
     "import-linter==2.15",
     "pip-audit==2.10.1",
-    "boto3-stubs[s3]==1.43.98",
+    "boto3-stubs[s3]==1.43.123",
     # starlette.testclient (used by the tests) wants httpx2.
-    "httpx2==2.13.0",
+    "httpx2==2.16.0",
     # The unit tests exercise every extra.
     "craftainer-observability[otel,sqlalchemy,redis,s3,http,profiling,analytics]",
 ]
@@ -120,6 +120,9 @@ addopts = "--strict-markers --strict-config -ra --ignore=tests/bench --cov=craft
 testpaths = ["tests/unit"]
 # Lets an `async def test_...` run without a per-test @pytest.mark.asyncio marker.
 asyncio_mode = "auto"
+# pytest-asyncio 1.4.1 warns while this is unset (an error under filterwarnings); "function"
+# is the default it is moving to.
+asyncio_default_fixture_loop_scope = "function"
 filterwarnings = [
     "error",
     # starlette's testclient still references the anyio.abc.BlockingPortal alias
