@@ -8,19 +8,22 @@ global setters monkeypatched.
 
 import json
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from typing import Any, cast
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from opentelemetry import metrics, trace
+from opentelemetry.attributes import BoundedAttributes
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace import Event, ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.sdk.util import BoundedList
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -216,3 +219,172 @@ def test_service_version_from_app_version_unless_resource_attributes_set_it(
     shared_resource.cache_clear()
     monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "service.version=9.9.9")
     assert shared_resource().attributes["service.version"] == "9.9.9"
+
+
+class _Capture(SpanExporter):
+    """A span exporter that keeps what it is handed."""
+
+    def __init__(self) -> None:
+        self.spans: list[ReadableSpan] = []
+        self.shut = False
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        """Keep `spans`."""
+        self.spans.extend(spans)
+        return SpanExportResult.SUCCESS
+
+    def shutdown(self) -> None:
+        """Record the call."""
+        self.shut = True
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        """Report success."""
+        return timeout_millis == 7
+
+
+def _redacting_provider() -> tuple[TracerProvider, _Capture]:
+    capture = _Capture()
+    provider = TracerProvider(resource=shared_resource())
+    provider.add_span_processor(SimpleSpanProcessor(otel.RedactingSpanExporter(capture)))
+    return provider, capture
+
+
+def test_query_string_never_reaches_the_exported_server_span() -> None:
+    """ASGI instrumentation records `/x?token=abc` in http.url and http.target; export strips it."""
+    provider, capture = _redacting_provider()
+    raw = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(raw))
+    app = FastAPI()
+
+    @app.get("/x")
+    def route() -> dict[str, str]:
+        return {"ok": "yes"}
+
+    FastAPIInstrumentor.instrument_app(app, tracer_provider=provider, excluded_urls="/none")
+    try:
+        assert TestClient(app).get("/x?token=abc&code=def").status_code == 200
+    finally:
+        FastAPIInstrumentor.uninstrument_app(app)
+    # The instrumentation itself does put the query in the span ...
+    (original,) = [s for s in raw.get_finished_spans() if s.kind == trace.SpanKind.SERVER]
+    assert original.attributes is not None
+    assert "token=abc" in str(original.attributes.get("http.url"))
+    # ... and the exporter removes it.
+    (exported,) = [s for s in capture.spans if s.kind == trace.SpanKind.SERVER]
+    assert exported.attributes is not None
+    assert "token" not in str(dict(exported.attributes))
+    assert "code=def" not in str(dict(exported.attributes))
+    assert str(exported.attributes["http.url"]).endswith("/x")
+    assert exported.attributes["http.target"] == "/x"
+
+
+def test_exporter_redacts_attributes_events_links_and_status() -> None:
+    """Credential keys and values are hidden in attributes, exception events, links, status."""
+    provider, capture = _redacting_provider()
+    tracer = provider.get_tracer("t")
+    other = tracer.start_span("other").get_span_context()
+    with tracer.start_as_current_span(
+        "work",
+        attributes={
+            "http.request.header.authorization": "Bearer abc.def",
+            "db.statement": "select 1 where password = 'hunter2'",
+            "url.query": "token=abc",
+            "url.full": "https://h/x#frag",
+            "tags": ["a", "token=zzz", 3],
+            "retries": 3,
+            "blob": b"raw",
+        },
+        links=[trace.Link(other, {"api_key": "k", "note": "dsn=postgres://u:p@h/d"})],
+    ) as span:
+        span.add_event("exception", {"exception.message": "boom password=hunter2"})
+        span.set_status(trace.Status(trace.StatusCode.ERROR, "failed: secret=hunter2"))
+    (done,) = [s for s in capture.spans if s.name == "work"]
+    assert done.attributes is not None
+    assert done.attributes["http.request.header.authorization"] == "[REDACTED]"
+    assert done.attributes["db.statement"] == "select 1 where password = [REDACTED]"
+    assert "url.query" not in done.attributes
+    assert done.attributes["url.full"] == "https://h/x"
+    assert done.attributes["tags"] == ("a", "token=[REDACTED]", 3)
+    assert done.attributes["retries"] == 3
+    assert done.attributes["blob"] == b"raw"
+    assert done.events[0].attributes == {"exception.message": "boom password=[REDACTED]"}
+    assert done.links[0].attributes == {"api_key": "[REDACTED]", "note": "dsn=[REDACTED]"}
+    assert done.status.description == "failed: secret=[REDACTED]"
+
+
+def test_exporter_keeps_a_span_without_attributes_or_status_text() -> None:
+    """An empty span passes through unchanged."""
+    provider, capture = _redacting_provider()
+    provider.get_tracer("t").start_span("bare").end()
+    (bare,) = capture.spans
+    assert not bare.attributes
+    assert bare.status.description is None
+
+
+def test_exporter_delegates_shutdown_and_flush() -> None:
+    """shutdown and force_flush reach the wrapped exporter."""
+    inner = _Capture()
+    exporter = otel.RedactingSpanExporter(inner)
+    exporter.shutdown()
+    assert inner.shut
+    assert exporter.force_flush(7) is True
+
+
+def test_configure_telemetry_wraps_the_otlp_span_exporter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The OTLP span exporter configure_telemetry builds is the redacting wrapper."""
+    monkeypatch.setattr(otel, "_state", None)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
+    monkeypatch.setattr(trace, "set_tracer_provider", lambda _p: None)
+    monkeypatch.setattr(metrics, "set_meter_provider", lambda _p: None)
+    built: list[object] = []
+
+    def _processor(exporter: object) -> SimpleSpanProcessor:
+        built.append(exporter)
+        return SimpleSpanProcessor(InMemorySpanExporter())
+
+    monkeypatch.setattr(otel, "BatchSpanProcessor", _processor)
+    otel.configure_telemetry()
+    assert isinstance(built[0], otel.RedactingSpanExporter)
+    state = otel._state
+    assert state is not None
+    state.meter_provider.shutdown()
+
+
+def test_strip_query_survives_an_unparseable_target() -> None:
+    """A crafted target that urlsplit rejects is still cut at the query, never raised."""
+    assert otel._strip_query("//[/x?q=1") == "//[/x"
+    assert otel._strip_query("http://[::1/?a#f") == "http://[::1/"
+
+
+def test_exporter_redacts_names_and_keeps_dropped_counts() -> None:
+    """Span and event names are scrubbed; the dropped counts reach the exporter."""
+    provider, capture = _redacting_provider()
+    tracer = provider.get_tracer("t")
+    with tracer.start_as_current_span("GET /login password=hunter2") as span:
+        span.add_event("retry token=abc", {"k": "v"})
+    (done,) = capture.spans
+    assert done.name == "GET /login password=[REDACTED]"
+    assert done.events[0].name == "retry token=[REDACTED]"
+    source = ReadableSpan(
+        "n",
+        attributes=BoundedAttributes(1, {"a": 1, "b": 2}),
+        events=BoundedList.from_seq(1, [Event("e", {"x": 1})]),
+    )
+    copy = otel._redact_span(source)
+    assert (copy.dropped_attributes, len(copy.attributes or {})) == (1, 1)
+
+
+def test_unredactable_span_is_exported_without_its_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If scrubbing a span raises, the span goes out empty, not raw."""
+
+    def boom(_value: str) -> str:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(otel, "redact_text", boom)
+    source = ReadableSpan("secret=1", attributes={"a": "password=x"})
+    copy = otel._redact_span(source)
+    assert copy.name == "[REDACTED]"
+    assert not copy.attributes
+    assert not copy.events
