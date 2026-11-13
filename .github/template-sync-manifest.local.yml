@@ -1,0 +1,4 @@
+# This instance's own files, which template sync must not touch. Same format as
+# template-sync-manifest.yml, "ignore" tier only.
+ignore:
+  - .github/workflows/sqlalchemy-lower-bound.yml
