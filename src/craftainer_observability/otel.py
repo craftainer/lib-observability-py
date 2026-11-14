@@ -230,4 +230,8 @@ def instrument_engine(engine: AsyncEngine) -> None:
         engine=engine.sync_engine,
         tracer_provider=_state.tracer_provider,
         meter_provider=_state.meter_provider,
+        # The instrumentation declares sqlalchemy < 2.1 and, without this, logs an error and
+        # instruments nothing on 2.1. Its hooks (engine events, pool metrics) work on 2.1:
+        # test_query_produces_db_span proves it on both 2.0 and 2.1.
+        skip_dep_check=True,
     )
