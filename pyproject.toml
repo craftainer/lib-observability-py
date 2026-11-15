@@ -24,10 +24,12 @@ otel = [
     "opentelemetry-instrumentation-logging>=0.65b0,<1",
     "opentelemetry-instrumentation-fastapi>=0.65b0,<1",
     "opentelemetry-instrumentation-sqlalchemy>=0.65b0,<1",
-    "sqlalchemy[asyncio]>=2.0.54,<2.1",
+    "sqlalchemy[asyncio]>=2.0.54,<2.2",
 ]
-# Upper bound: opentelemetry-instrumentation-sqlalchemy supports < 2.1 only.
-sqlalchemy = ["sqlalchemy[asyncio]>=2.0.54,<2.1"]
+# 2.0 and 2.1 are both supported (uv.lock pins 2.1; CI also tests 2.0, see
+# .github/workflows/sqlalchemy-lower-bound.yml). opentelemetry-instrumentation-sqlalchemy still
+# declares < 2.1; otel.instrument_engine bypasses that check (skip_dep_check).
+sqlalchemy = ["sqlalchemy[asyncio]>=2.0.54,<2.2"]
 redis = ["redis>=8.1.0,<9"]
 s3 = ["boto3>=1.43.98,<2"]
 http = ["httpx>=0.28.1,<1"]

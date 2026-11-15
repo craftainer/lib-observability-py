@@ -44,9 +44,11 @@ pip install "craftainer-observability[otel,redis]"      # plus tracing/metrics/l
 
 `logs.py` and `otel.py` import OpenTelemetry at module level, so import them
 only when `[otel]` is installed. The package root, `health` and `middleware`
-import with no extra installed (a unit test proves it). Note that
-`opentelemetry-sqlalchemy` instrumentation supports SQLAlchemy below 2.1 only,
-hence the `<2.1` bound.
+import with no extra installed (a unit test proves it). SQLAlchemy 2.0.54 up to
+(not including) 2.2 is supported; the tests run against 2.1 (the lock) and, in CI,
+against 2.0. `opentelemetry-instrumentation-sqlalchemy` still declares SQLAlchemy
+below 2.1, so `instrument_engine` passes `skip_dep_check=True` (otherwise it
+instruments nothing on 2.1); a unit test proves query spans on both.
 
 ## Public API
 
